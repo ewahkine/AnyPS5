@@ -84,6 +84,8 @@ void Check(AgcDriver::VulkanDevice& device, AgcDriver::Graphics::ShaderPath path
     AgcDriver::QueueState queue{};
     queue.context[0x8e] = 0xfu;
     queue.context[0x8f] = 0xfu;
+    Require(StaticVertexOutControl(queue) == 0u, "a static ABI without PA_CL_VS_OUT_CNTL exported a layer");
+    queue.context[0x207] = (1u << 18u) | (1u << 21u);
     front.Bind(queue, tessellation ? 0x148u : 0xc8u, tessellation ? 0x10bu : 0x8bu);
     if (tessellation || mesh) back.Bind(queue, tessellation ? 0x108u : 0x88u, tessellation ? 0x10bu : 0x8bu);
     if (tessellation) domain.Bind(queue, 0xc8u, 0x8bu);
@@ -99,6 +101,8 @@ void Check(AgcDriver::VulkanDevice& device, AgcDriver::Graphics::ShaderPath path
     prepared.state.stages.fragmentWaveSize = 32u;
     if (mesh) prepared.state.stages.mesh = MeshConfiguration{4, 1, 3, 3, 1, 64, 128, 0, 4};
     if (tessellation) prepared.state.stages.tessellation = TessellationConfiguration{3, 4, 1, 2, 2};
+    prepared.state.vertexOutControl = StaticVertexOutControl(queue);
+    Require(prepared.state.vertexOutControl == AgcDriver::Graphics::VertexLayerControl(queue.context[0x207]) && prepared.state.vertexOutControl != 0u, "the static ABI lost the layer export of PA_CL_VS_OUT_CNTL");
     prepared.pixel.wave32 = true;
     prepared.pixel.interpolatorCount = 2;
     prepared.pixel.interpolatorSettings[0] = 0x403u;
@@ -224,7 +228,10 @@ void Check(AgcDriver::VulkanDevice& device, AgcDriver::Graphics::ShaderPath path
         const auto& program = draw.programs[index];
         const bool pixel = program.binary.stage == ShaderStage::Fragment;
         std::optional<ShaderVertexStageInfo> vertex;
-        if (!pixel) vertex = AgcDriver::Graphics::DecodeVertexStageInfo(program.binary.header, program.binary.headerAddress, program.userData, nullptr, true);
+        if (!pixel) {
+            vertex = AgcDriver::Graphics::DecodeVertexStageInfo(program.binary.header, program.binary.headerAddress, program.userData, nullptr, true);
+            vertex->paClVsOutCntl = AgcDriver::Graphics::VertexLayerControl(queue.context[0x207]);
+        }
         RecompileRequest request{program.binary, {pixel ? 32u : prepared.state.stages.vertexWaveSize, program.firstUserSgpr, program.userData, {}, pixel ? std::optional(draw.pixel) : std::nullopt, vertex, memory}, target, {0, 0, 0, mesh ? MeshDrawPushOffsetBytes : 128u}, GraphicsCompileContext{program.firstUserSgpr, linked, prepared.state.stages.mesh, prepared.state.stages.tessellation, {0, 3, 4, 1}}};
         static_cast<void>(InvocationFor(*program.snapshot, program.codeOffset, request));
         request.layout.pushConstantOffsetBytes = 4;
@@ -233,6 +240,11 @@ void Check(AgcDriver::VulkanDevice& device, AgcDriver::Graphics::ShaderPath path
         request.layout.pushConstantOffsetBytes = 2;
         Reject([&] { static_cast<void>(InvocationFor(*program.snapshot, program.codeOffset, request)); }, "artifact is missing");
         request.layout = {0, 0, 0, mesh ? MeshDrawPushOffsetBytes : 128u};
+        if (!pixel) {
+            request.context.vertex->paClVsOutCntl = 0u;
+            Reject([&] { static_cast<void>(InvocationFor(*program.snapshot, program.codeOffset, request)); }, "differs in vertex output control");
+            request.context.vertex->paClVsOutCntl = prepared.state.vertexOutControl;
+        }
         if (pixel) request.context.pixel->interpolatorSettings[0] ^= 1u;
         else if (tessellation) ++request.graphics->tessellation->outputControlPoints;
         else if (mesh) ++request.graphics->mesh->maxVertices;

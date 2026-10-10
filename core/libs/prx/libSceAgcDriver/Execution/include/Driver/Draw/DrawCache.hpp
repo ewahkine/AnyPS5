@@ -33,6 +33,7 @@ struct DrawDecode {
 };
 
 void DecodeGraphicsPrograms(DrawDecode& decoded, const QueueState& queue, const ShaderRegistry& registry, bool staticAbi, bool includeFragment);
+std::uint32_t StaticVertexOutControl(const QueueState& queue);
 
 struct PreparedGraphicsStage {
     std::shared_ptr<const ShaderSnapshot> snapshot;

@@ -495,7 +495,7 @@ std::unique_ptr<RegisteredPreparation> PlanRegistered(const ShaderSnapshot& snap
     plan->userData.resize(userCount);
     if (stage != Stage::Compute && stage != Stage::Fragment && snapshot.type != 6) {
         vertex = Graphics::DecodeVertexStageInfo(snapshot.header, snapshot.headerAddress, plan->userData, nullptr, true);
-        if (const auto control = state.context.find(0x207); control != state.context.end()) vertex->paClVsOutCntl = Graphics::VertexLayerControl(control->second);
+        vertex->paClVsOutCntl = StaticVertexOutControl(state);
     }
     plan->swappc = {vertex.has_value(), firstUser, userCount};
     if (deferred != nullptr) {
@@ -625,6 +625,11 @@ void PrepareRegisteredInBackground(std::shared_ptr<const ShaderSnapshot> snapsho
 
 }
 
+std::uint32_t StaticVertexOutControl(const QueueState& queue) {
+    const auto control = queue.context.find(0x207);
+    return control != queue.context.end() ? Graphics::VertexLayerControl(control->second) : 0u;
+}
+
 std::vector<PreparedGraphicsStage> PrepareGraphicsStages(const DrawDecode& decoded, const ShaderRecompiler::SpirvTarget& target) {
     ShaderPreparationTransaction transaction;
     require(decoded.programs.size() == decoded.roles.size(), "graphics ABI program roles are incomplete");
@@ -733,6 +738,7 @@ void Driver::ResolveGraphicsStagesAbi(std::span<const Shader* const> stages, std
     }
     DrawDecode decoded{};
     decoded.state.stages = Graphics::DecodeShaderStages(state);
+    decoded.state.vertexOutControl = StaticVertexOutControl(state);
     DecodeGraphicsPrograms(decoded, state, *registry, true, false);
     auto prepared = PrepareGraphicsStages(decoded, localDevice->Target());
     for (auto& stage : prepared) {
