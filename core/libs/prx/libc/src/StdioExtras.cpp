@@ -21,10 +21,11 @@ using GuestNewHandler = void (APS5_VABI*)();
 
 std::atomic<GuestNewHandler> g_newHandler{nullptr};
 
-void* Allocate(std::size_t size) {
+void* Allocate(std::size_t size, std::size_t alignment = 0) {
     for (;;) {
         GuestNewHandler handler = nullptr;
         try {
+            if (alignment != 0) return ApplicationHeapAlign_nid_no_patch(alignment, size == 0 ? 1 : size);
             return ApplicationHeapAllocate_nid_no_patch(size == 0 ? 1 : size);
         } catch (const std::bad_alloc&) {
             handler = g_newHandler.load();
@@ -85,6 +86,14 @@ void* APS5_VABI _Znam_nid_postfix(std::size_t size) {
     return Allocate(size);
 }
 
+void* APS5_VABI _ZnwmSt11align_val_t_nid_postfix(std::size_t size, std::size_t alignment) {
+    return Allocate(size, alignment);
+}
+
+void* APS5_VABI _ZnamSt11align_val_t_nid_postfix(std::size_t size, std::size_t alignment) {
+    return Allocate(size, alignment);
+}
+
 void* APS5_VABI _ZnwmRKSt9nothrow_t_nid_postfix(std::size_t size, const void*) noexcept {
     try {
         return Allocate(size);
@@ -118,6 +127,11 @@ void APS5_VABI _ZdaPvm_nid_postfix(void* pointer, std::size_t) {
 }
 
 void APS5_VABI _ZdlPvSt11align_val_t_nid_postfix(void* pointer, std::size_t alignment) {
+    (void)alignment;
+    if (pointer != nullptr) ApplicationHeapFree_nid_no_patch(pointer);
+}
+
+void APS5_VABI _ZdaPvSt11align_val_t_nid_postfix(void* pointer, std::size_t alignment) {
     (void)alignment;
     if (pointer != nullptr) ApplicationHeapFree_nid_no_patch(pointer);
 }

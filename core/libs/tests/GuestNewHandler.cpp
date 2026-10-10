@@ -14,6 +14,8 @@ void* APS5_VABI _Znwm_nid_postfix(std::size_t);
 void* APS5_VABI _Znam_nid_postfix(std::size_t);
 void* APS5_VABI _ZnwmRKSt9nothrow_t_nid_postfix(std::size_t, const void*) noexcept;
 void* APS5_VABI _ZnamRKSt9nothrow_t_nid_postfix(std::size_t, const void*) noexcept;
+void* APS5_VABI _ZnwmSt11align_val_t_nid_postfix(std::size_t, std::size_t);
+void* APS5_VABI _ZnamSt11align_val_t_nid_postfix(std::size_t, std::size_t);
 }
 
 namespace {
@@ -23,6 +25,7 @@ unsigned failuresLeft = 0;
 unsigned allocations = 0;
 unsigned handlerCalls = 0;
 std::size_t lastSize = 0;
+std::size_t lastAlignment = 0;
 
 void Require(bool condition, int line) {
     if (!condition) {
@@ -46,7 +49,10 @@ void* APS5_VABI allocate(std::size_t bytes) {
 void APS5_VABI release(void*) {}
 void* APS5_VABI allocateZeroed(std::size_t count, std::size_t bytes) { return allocate(count * bytes); }
 void* APS5_VABI reallocate(void*, std::size_t bytes) { return allocate(bytes); }
-void* APS5_VABI align(std::size_t, std::size_t bytes) { return allocate(bytes); }
+void* APS5_VABI align(std::size_t alignment, std::size_t bytes) {
+    lastAlignment = alignment;
+    return allocate(bytes);
+}
 void* APS5_VABI realign(void*, std::size_t bytes, std::size_t) { return allocate(bytes); }
 int APS5_VABI posixAlign(void** pointer, std::size_t, std::size_t bytes) {
     *pointer = allocate(bytes);
@@ -106,6 +112,10 @@ int main() {
     REQUIRE(_ZnwmRKSt9nothrow_t_nid_postfix(8, nullptr) == nullptr && handlerCalls == 0);
     Reset(1);
     REQUIRE(_ZnamRKSt9nothrow_t_nid_postfix(8, nullptr) == nullptr && handlerCalls == 0);
+    Reset(1);
+    REQUIRE(Throws([] { _ZnwmSt11align_val_t_nid_postfix(8, 16); }) && handlerCalls == 0 && allocations == 1);
+    Reset(0);
+    REQUIRE(_ZnwmSt11align_val_t_nid_postfix(24, 16) == storage.data() && lastSize == 24 && lastAlignment == 16);
 
     REQUIRE(_ZSt15set_new_handlerPFvvE_nid_postfix(&countingHandler) == nullptr);
     REQUIRE(_ZSt15get_new_handlerv_nid_postfix() == &countingHandler);
@@ -121,6 +131,9 @@ int main() {
     REQUIRE(_Znwm_nid_postfix(8) == storage.data() && handlerCalls == 0 && allocations == 1);
     Reset(1);
     REQUIRE(_Znwm_nid_postfix(0) == storage.data() && lastSize == 1 && handlerCalls == 1);
+    Reset(2);
+    REQUIRE(_ZnamSt11align_val_t_nid_postfix(0, 8) == storage.data() && lastSize == 1 && lastAlignment == 8);
+    REQUIRE(handlerCalls == 2 && allocations == 3);
 
     REQUIRE(_ZSt15set_new_handlerPFvvE_nid_postfix(&uninstallingHandler) == &countingHandler);
     Reset(100);

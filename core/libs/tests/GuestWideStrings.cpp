@@ -13,6 +13,7 @@ std::size_t APS5_VABI wcslen_nid_postfix(const char16_t* s);
 int APS5_VABI wcscmp_nid_postfix(const char16_t* s1, const char16_t* s2);
 int APS5_VABI wcsncmp_nid_postfix(const char16_t* s1, const char16_t* s2, std::size_t n);
 char16_t* APS5_VABI wcscpy_nid_postfix(char16_t* dest, const char16_t* src);
+char16_t* APS5_VABI wcscat_nid_postfix(char16_t* dest, const char16_t* src);
 char16_t* APS5_VABI wcsncpy_nid_postfix(char16_t* dest, const char16_t* src, std::size_t n);
 const char16_t* APS5_VABI wcschr_nid_postfix(const char16_t* s, char16_t c);
 const char16_t* APS5_VABI wcsrchr_nid_postfix(const char16_t* s, char16_t c);
@@ -67,6 +68,9 @@ int main() {
     wmemset_nid_postfix(buffer, 0xaaaa, 8);
     require(wcscpy_nid_postfix(buffer, u"wide") == buffer);
     require(same(buffer, u"wide", 5) && buffer[5] == 0xaaaa);
+    require(wcscat_nid_postfix(buffer, u"st") == buffer);
+    require(same(buffer, u"widest", 7) && buffer[7] == 0xaaaa);
+    require(wcscat_nid_postfix(buffer, u"") == buffer && same(buffer, u"widest", 7));
 
     wmemset_nid_postfix(buffer, 0xaaaa, 8);
     require(wcsncpy_nid_postfix(buffer, u"ab", 5) == buffer);
