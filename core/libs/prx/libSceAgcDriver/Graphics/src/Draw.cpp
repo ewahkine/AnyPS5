@@ -65,7 +65,7 @@ GuestTextureResource SurfaceForTarget(const ColorTarget& color) {
     Require(color.tileMode != ColorTileMode::Linear, "linear color targets are not resident");
     const bool chain = color.mipCount > 1;
     GuestTextureResource surface{};
-    if (color.layers > 1) {
+    if (color.layers > 1 && color.depth == 1) {
         surface.baseAddress = color.arrayAddress;
         surface.pipeBankXor = color.pipeBankXor;
         surface.width = color.extent.width;
@@ -1848,7 +1848,7 @@ void Draw(const Context& context, const State& state, const Pm4::DrawParameters&
                 auto resident = CachedStorageSurface(context, SurfaceForTarget(color));
                 Require(resident->Attachable(), "storage format cannot be a color attachment");
                 Require(color.mipCount > 1 || color.depth > 1 || color.layers > 1 || resident->GuestBytes() == colorLayout.Bytes(), "resident image layout differs from the color layout");
-                Require(color.layers == 1 || resident->GuestBytes() == color.arrayLayers * color.layerBytes, "resident array image layout differs from the color slices");
+                Require(color.layers == 1 || color.depth > 1 || resident->GuestBytes() == color.arrayLayers * color.layerBytes, "resident array image layout differs from the color slices");
                 return resident;
             });
         }

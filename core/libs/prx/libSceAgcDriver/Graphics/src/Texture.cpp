@@ -1147,7 +1147,7 @@ VkImageView StorageTexture::AttachmentView(VkFormat format, std::uint32_t mip, s
     Require(mip < descriptor.mipCount, "attachment mip exceeds the storage image");
     const bool volume = descriptor.dimension == TextureDimension::k3D;
     const bool layered = layers > 1;
-    Require(!layered || (descriptor.dimension == TextureDimension::k2DArray && geometry.imageLayers == descriptor.depthOrLastArray + 1u && depthSlice + layers <= geometry.imageLayers), "attachment slices are outside the storage image");
+    Require(!layered || (descriptor.dimension == TextureDimension::k2DArray && geometry.imageLayers == descriptor.depthOrLastArray + 1u && depthSlice + layers <= geometry.imageLayers) || (volume && mip == 0 && geometry.imageDepth == descriptor.depthOrLastArray + 1u && depthSlice + layers <= geometry.imageDepth), "attachment slices are outside the storage image");
     Require(layered || depthSlice == 0 || (volume && mip == 0 && depthSlice <= descriptor.depthOrLastArray), "attachment slice is outside the storage image");
     const auto found = attachmentViews.find({format, mip, depthSlice, layers});
     if (found != attachmentViews.end()) return found->second;

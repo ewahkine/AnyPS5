@@ -847,8 +847,8 @@ ColorTarget DecodeColorBuffer(const Registers& cx, std::uint32_t slot) {
     Require(((attrib3 >> 24u) & 3u) != 0u || (attrib2 & 0x3fffu) == 0u, "1D color targets taller than one row are unsupported");
     if (volume) {
         color.depth = (attrib3 & 0x1fffu) + 1u;
-        Require(maxMip == 0 && (info & 0x10000000u) == 0, "mipmapped or DCC 3D color targets are unsupported");
-        Require(slice < color.depth, "the color view slice is beyond the 3D surface");
+        Require(maxMip == 0, "mipmapped 3D color targets are unsupported");
+        Require(lastSlice < color.depth, "the color view slice is beyond the 3D surface");
         color.depthSlice = slice;
     } else if ((attrib3 & 0x1fffu) != 0) {
         Require(slice <= (attrib3 & 0x1fffu), "the color view slice is beyond the array surface");
@@ -875,8 +875,11 @@ ColorTarget DecodeColorBuffer(const Registers& cx, std::uint32_t slot) {
         color.pipeBankXor = static_cast<std::uint32_t>(color.surfaceAddress & (ColorTileModeBlockBytes(color.tileMode) - 1u));
         color.surfaceAddress -= color.pipeBankXor;
     }
-    if (lastSlice != slice) {
-        Require(!volume, "rendering into several slices of a 3D color target is unsupported");
+    if (lastSlice != slice && volume) {
+        Require((info & 0x2000u) == 0, "rendering into several slices of a CMASK 3D color target is unsupported");
+        color.layers = lastSlice - slice + 1u;
+        color.baseLayer = slice;
+    } else if (lastSlice != slice) {
         Require(maxMip == 0, "rendering into several slices of a mipmapped array color target is unsupported");
         Require((info & 0x10002000u) == 0, "rendering into several slices of a DCC or CMASK color target is unsupported");
         Require(lastSlice <= (attrib3 & 0x1fffu), "the color view slices are beyond the array surface");
@@ -889,7 +892,7 @@ ColorTarget DecodeColorBuffer(const Registers& cx, std::uint32_t slot) {
     if (slice != 0 && !volume) color.surfaceAddress += slice * color.layerBytes;
     color.address = color.surfaceAddress + mipOffset;
     color.bytes = colorLayout.Bytes();
-    if (color.layers > 1) {
+    if (color.layers > 1 && !volume) {
         Require(color.layerBytes >= color.bytes, "a color target slice is larger than its slice stride");
         color.bytes += (color.layers - 1u) * color.layerBytes;
     }
@@ -914,7 +917,13 @@ ColorTarget DecodeColorBuffer(const Registers& cx, std::uint32_t slot) {
         GuestMemory::CheckRange(reinterpret_cast<const void*>(color.cmaskAddress), color.cmaskBytes, CmaskLayout::Alignment, true);
     }
     if ((info & 0x10000000u) != 0) {
-        if (maxMip == 0) {
+        if (volume) {
+            static bool reported = false;
+            if (!reported) {
+                reported = true;
+                std::fprintf(stderr, "[gpu] DCC keys of 3D color targets are ignored\n");
+            }
+        } else if (maxMip == 0) {
             const auto dccHigh = find(cx, 0x3a8 + slot);
             color.dccAddress = ((dccHigh == cx.end() ? 0ull : static_cast<std::uint64_t>(dccHigh->second & 0xffu)) << 40u) | (static_cast<std::uint64_t>(read(cx, 0x325 + stride)) << 8u);
             color.dccAlphaOnMsb = DccAlphaOnMsb(color.format, swap);

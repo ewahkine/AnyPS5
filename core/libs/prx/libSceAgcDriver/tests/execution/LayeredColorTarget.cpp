@@ -44,6 +44,7 @@ constexpr std::uint32_t LastSlice = 2;
 constexpr std::size_t BlockBytes = 65536;
 constexpr std::uint32_t Float32Info = (4u << 2u) | (7u << 8u);
 constexpr std::uint32_t TiledAttrib3 = 0x4dc6c000u | (Slices - 1u);
+constexpr std::uint32_t VolumeAttrib3 = 0x4ec6c000u | (Slices - 1u);
 constexpr std::uint32_t Float32Export = 9;
 constexpr std::uint32_t LayerOutControl = (1u << 18u) | (1u << 21u);
 
@@ -51,7 +52,7 @@ alignas(256) constexpr std::array<std::uint32_t, 10> VertexCode{
     0xe0382000, 0x80000005, 0xbf8c3f70, 0x7e0a0f02, 0x7e0402f0, 0xf80000cf, 0x03020100, 0xf80008d4, 0x00050000, 0xbf810000,
 };
 
-alignas(256) std::array<std::array<std::uint32_t, 16>, 4> Programs{};
+alignas(256) std::array<std::array<std::uint32_t, 16>, 16> Programs{};
 std::size_t programCount = 0;
 
 std::span<const std::uint32_t> ConstantProgram(float value) {
@@ -125,19 +126,19 @@ struct Block {
     std::uint8_t* data = nullptr;
 };
 
-AgcDriver::Registers TargetRegisters(std::uint64_t address, std::uint32_t firstSlice, std::uint32_t lastSlice) {
+AgcDriver::Registers TargetRegisters(std::uint64_t address, std::uint32_t firstSlice, std::uint32_t lastSlice, std::uint32_t attrib3 = TiledAttrib3) {
     AgcDriver::Registers cx;
     cx[0x318] = static_cast<std::uint32_t>(address >> 8u);
     cx[0x31b] = firstSlice | (lastSlice << 13u);
     cx[0x31c] = Float32Info;
     cx[0x31d] = 0;
     cx[0x3b0] = ((Width - 1u) << 14u) | (Height - 1u);
-    cx[0x3b8] = TiledAttrib3;
+    cx[0x3b8] = attrib3;
     cx[0x390] = static_cast<std::uint32_t>(address >> 40u);
     return cx;
 }
 
-void Draw(AgcDriver::VulkanDevice& device, const AgcDriver::Graphics::ColorTarget& color, float layer, float value) {
+void Draw(AgcDriver::VulkanDevice& device, const AgcDriver::Graphics::ColorTarget& color, float layer, float value, std::uint32_t outControl = LayerOutControl) {
     const auto target = device.Target();
     constexpr std::uint32_t waveSize = 64;
     static std::array<std::array<float, 4>, 3> triangle{};
@@ -148,7 +149,7 @@ void Draw(AgcDriver::VulkanDevice& device, const AgcDriver::Graphics::ColorTarge
     std::copy(vertexBuffer.begin(), vertexBuffer.end(), vertexUserData.begin());
     const std::array<ShaderRecompiler::MemoryRegion, 1> vertexMemory{{{reinterpret_cast<std::uintptr_t>(VertexCode.data()), std::as_bytes(std::span(VertexCode))}}};
     ShaderRecompiler::ShaderVertexStageInfo vertexInfo{};
-    vertexInfo.paClVsOutCntl = LayerOutControl;
+    vertexInfo.paClVsOutCntl = outControl;
     ShaderRecompiler::RecompileRequest vertex{
         {ShaderStage::Vertex, reinterpret_cast<std::uintptr_t>(VertexCode.data()), VertexCode, 0, {}},
         {waveSize, 0, vertexUserData, std::nullopt, std::nullopt, vertexInfo, vertexMemory},
@@ -164,7 +165,7 @@ void Draw(AgcDriver::VulkanDevice& device, const AgcDriver::Graphics::ColorTarge
     state.colors = {color};
     state.color = color;
     state.hasColorTarget = true;
-    state.vertexOutControl = LayerOutControl;
+    state.vertexOutControl = outControl;
     state.renderExtent = {Width, Height};
     state.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
     state.viewport = {0, static_cast<float>(Height), static_cast<float>(Width), -static_cast<float>(Height), 0, 1};
@@ -221,6 +222,33 @@ void ExpectSlices(const std::vector<float>& stored, const std::vector<float>& be
     }
 }
 
+void Mark(Block& block) {
+    for (std::size_t word = 0; word < block.bytes / 4u; ++word) {
+        const float marker = -1.0f - static_cast<float>(word % 7u);
+        std::memcpy(block.data + word * 4u, &marker, 4);
+    }
+}
+
+void VolumeTests(AgcDriver::VulkanDevice& device) {
+    Block block(BlockBytes * 64);
+    for (std::uint32_t layer = 0; layer < 2; ++layer) {
+        Mark(block);
+        const auto marked = ReadBack(device, block);
+        const auto layered = AgcDriver::Graphics::DecodeColorBuffer(TargetRegisters(block.Address(), FirstSlice, LastSlice, VolumeAttrib3), 0);
+        Require(layered.depth == Slices && layered.layers == LastSlice - FirstSlice + 1u && layered.baseLayer == FirstSlice, "the 3D view did not decode its slice range");
+        Draw(device, layered, static_cast<float>(layer), 0.5f);
+        const auto throughLayers = ReadBack(device, block);
+        Mark(block);
+        static_cast<void>(ReadBack(device, block));
+        const auto single = AgcDriver::Graphics::DecodeColorBuffer(TargetRegisters(block.Address(), FirstSlice + layer, FirstSlice + layer, VolumeAttrib3), 0);
+        Require(single.layers == 1 && single.depthSlice == FirstSlice + layer, "the one-slice 3D view did not decode its slice");
+        Draw(device, single, 0.0f, 0.5f, 0);
+        const auto throughSlice = ReadBack(device, block);
+        Require(throughSlice != marked, "a draw into one 3D slice wrote nothing");
+        Require(throughLayers == throughSlice, "a draw exporting layer " + std::to_string(layer) + " of a 3D view differs from a draw into that slice alone");
+    }
+}
+
 }
 
 int main() {
@@ -250,6 +278,7 @@ int main() {
         Draw(*device, color, 0.0f, 0.25f);
         const auto second = ReadBack(*device, block);
         ExpectSlices(second, first, layout, layerBytes, {0.0f, 0.25f, 0.0f, 0.0f}, {false, true, false, false}, "a draw exporting layer 0 of a view starting at slice 1");
+        VolumeTests(*device);
         std::puts("layered color target tests passed");
         return 0;
     } catch (const std::exception& error) {

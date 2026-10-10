@@ -967,9 +967,15 @@ void DepthStencilTests() {
     Require(volume.color.address == sliced && volume.color.depth == 4u && volume.color.depthSlice == 2u, "a color view of one 3D depth slice did not keep the surface address and select the slice");
     queue.context[0x31b] = 4u | (4u << 13u);
     expectFailure([&] { AgcDriver::Graphics::DecodeState(queue); }, "beyond the 3D surface");
+    queue.context[0x31b] = 1u | (3u << 13u);
+    const auto volumeSlices = AgcDriver::Graphics::DecodeState(queue);
+    Require(volumeSlices.color.address == sliced && volumeSlices.color.depth == 4u && volumeSlices.color.depthSlice == 1u && volumeSlices.color.layers == 3u && volumeSlices.color.baseLayer == 1u && AgcDriver::Graphics::RenderLayers(volumeSlices) == 3u, "a color view of three 3D depth slices did not select them");
+    queue.context[0x31b] = 1u | (4u << 13u);
+    expectFailure([&] { AgcDriver::Graphics::DecodeState(queue); }, "beyond the 3D surface");
     queue.context[0x31b] = 0;
     queue.context[0x31c] |= 0x10000000;
-    expectFailure([&] { AgcDriver::Graphics::DecodeState(queue); }, "DCC 3D color targets");
+    const auto compressedVolume = AgcDriver::Graphics::DecodeState(queue);
+    Require(compressedVolume.color.depth == 4u && compressedVolume.color.dccAddress == 0u, "a DCC 3D color target did not render without its keys");
 }
 
 void OneDimensionalColorTests() {
