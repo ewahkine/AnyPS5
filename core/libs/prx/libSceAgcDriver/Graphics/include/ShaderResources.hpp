@@ -3,6 +3,7 @@
 
 #include "prx/libSceAgcDriver/Graphics/include/Resources.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/BdaResources.hpp"
+#include "prx/libSceAgcDriver/Graphics/include/DepthSurface.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/Texture.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/Sampler.hpp"
 #include "Recompiler.hpp"
@@ -143,6 +144,11 @@ public:
     // (storage images stay there; buffer ranges are noted so CPU reads wait); WriteBackBuffers runs
     // once the work completed.
     void MarkGpuWrites(Recorder& recorder);
+    // Depth surface planes bound as storage images (dispatches only): their storage images are
+    // loaded from the depth image before the work and the written ones stored back after it.
+    bool HasDepthPlanes() const { return !depthPlanes.empty(); }
+    void RecordDepthPlaneLoads(VkCommandBuffer commands) const;
+    void RecordDepthPlaneStores(VkCommandBuffer commands) const;
     void WriteBackBuffers();
     // Whether WriteBackBuffers has anything the CPU must see (copied written buffers, BDA faults).
     bool NeedsCompletion() const { return bda != nullptr || guestMemory.HasCopiedWrites(); }
@@ -436,6 +442,11 @@ private:
     std::vector<bool> storageWritten;
     std::vector<bool> storageAtomic;
     std::vector<bool> storageAtomic64;
+    struct BoundDepthPlane {
+        DepthPlane plane;
+        std::size_t storage;
+    };
+    std::vector<BoundDepthPlane> depthPlanes;
     std::vector<std::shared_ptr<Sampler>> samplers;
     std::shared_ptr<Sampler> paddingSampler;
     struct SamplerSource {

@@ -3485,6 +3485,10 @@ void VulkanDevice::recordDispatch(RecordedDispatch& record) {
     if (recorder.HasQueuedStores() && (resources.HoldsLease() || recorder.AnyQueuedStore(touches))) recorder.FlushStores();
     VkAccessFlags covered = 0;
     const auto commands = recorder.Commands(&covered);
+    if (resources.HasDepthPlanes()) {
+        resources.RecordDepthPlaneLoads(commands);
+        covered = 0;
+    }
     recordStep(PhaseRecordCommands);
     recorder.Keep(record.objects);
     recorder.Keep(record.resources);
@@ -3555,6 +3559,7 @@ void VulkanDevice::recordDispatch(RecordedDispatch& record) {
     Graphics::RecordMemoryBarrier(context, commands, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT | VK_PIPELINE_STAGE_HOST_BIT, VK_ACCESS_SHADER_WRITE_BIT, dispatchedAccess);
     Graphics::Recorder::CountBarriers(CommandClass::DispatchTrailing);
     recorder.EndGpuTiming(trailingTiming);
+    if (resources.HasDepthPlanes()) resources.RecordDepthPlaneStores(commands);
     recorder.MarkCovered(dispatchedAccess);
     recordStep(PhaseRecordBind);
     resources.MarkGpuWrites(recorder);

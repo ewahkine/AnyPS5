@@ -36,7 +36,7 @@ public:
             info.arrayLayers = 1;
             info.samples = VK_SAMPLE_COUNT_1_BIT;
             info.tiling = VK_IMAGE_TILING_OPTIMAL;
-            info.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+            info.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
             info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
             info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
             Check(context.Function<PFN_vkCreateImage>("vkCreateImage")(context.device, &info, nullptr, &image), "vkCreateImage depth");
@@ -120,17 +120,40 @@ public:
         return texture;
     }
 
+    VkBuffer Staging() {
+        if (staging != VK_NULL_HANDLE) return staging;
+        VkBufferCreateInfo info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+        info.size = static_cast<VkDeviceSize>(target.extent.width) * target.extent.height * 4u;
+        info.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        Check(context.Function<PFN_vkCreateBuffer>("vkCreateBuffer")(context.device, &info, nullptr, &staging), "vkCreateBuffer depth plane staging");
+        VkMemoryRequirements requirements{};
+        context.Function<PFN_vkGetBufferMemoryRequirements>("vkGetBufferMemoryRequirements")(context.device, staging, &requirements);
+        VkMemoryAllocateInfo allocation{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+        allocation.allocationSize = requirements.size;
+        allocation.memoryTypeIndex = context.MemoryType(requirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        Check(context.Function<PFN_vkAllocateMemory>("vkAllocateMemory")(context.device, &allocation, nullptr, &stagingMemory), "vkAllocateMemory depth plane staging");
+        Check(context.Function<PFN_vkBindBufferMemory>("vkBindBufferMemory")(context.device, staging, stagingMemory, 0), "vkBindBufferMemory depth plane staging");
+        return staging;
+    }
+
     const Context context;
     const DepthTarget target;
     VkImage image = VK_NULL_HANDLE;
     VkImageView view = VK_NULL_HANDLE;
     VkDeviceMemory memory = VK_NULL_HANDLE;
+    VkBuffer staging = VK_NULL_HANDLE;
+    VkDeviceMemory stagingMemory = VK_NULL_HANDLE;
 
 private:
     std::map<std::array<std::uint32_t, 12>, std::shared_ptr<Texture>> textures;
 
     void release() noexcept {
         textures.clear();
+        if (staging) context.Function<PFN_vkDestroyBuffer>("vkDestroyBuffer")(context.device, staging, nullptr);
+        if (stagingMemory) context.Function<PFN_vkFreeMemory>("vkFreeMemory")(context.device, stagingMemory, nullptr);
+        staging = VK_NULL_HANDLE;
+        stagingMemory = VK_NULL_HANDLE;
         if (view) context.Function<PFN_vkDestroyImageView>("vkDestroyImageView")(context.device, view, nullptr);
         if (image) context.Function<PFN_vkDestroyImage>("vkDestroyImage")(context.device, image, nullptr);
         if (memory) context.Function<PFN_vkFreeMemory>("vkFreeMemory")(context.device, memory, nullptr);
@@ -227,6 +250,66 @@ std::string DescribeDepthSurfaceAt(std::uint64_t address) {
         return text;
     }
     return "no depth surface";
+}
+
+std::optional<DepthPlane> DepthPlaneForStorage(const Context& context, const GuestTextureResource& resource, std::uint32_t mip) {
+    std::lock_guard lock(surfacesMutex());
+    const auto& list = surfaces();
+    const auto found = std::find_if(list.rbegin(), list.rend(), [&](const auto& surface) {
+        return surface->context.device == context.device && (surface->target.address == resource.baseAddress || (surface->target.stencilAddress != 0 && surface->target.stencilAddress == resource.baseAddress));
+    });
+    if (found == list.rend()) return std::nullopt;
+    auto& surface = **found;
+    const auto& target = surface.target;
+    const bool stencil = target.stencilAddress != 0 && resource.baseAddress == target.stencilAddress;
+    const bool d16 = target.format == VK_FORMAT_D16_UNORM || target.format == VK_FORMAT_D16_UNORM_S8_UINT;
+    const std::uint32_t planeBytes = stencil ? 1u : d16 ? 2u : 4u;
+    if (!stencil && target.format != VK_FORMAT_D16_UNORM && target.format != VK_FORMAT_D16_UNORM_S8_UINT && target.format != VK_FORMAT_D32_SFLOAT && target.format != VK_FORMAT_D32_SFLOAT_S8_UINT) {
+        throw std::runtime_error("AGC graphics: storage image access to the depth plane of vk format " + std::to_string(target.format) + " is not implemented");
+    }
+    const auto texelBytes = BytesPerElement(resource.format);
+    if (texelBytes != planeBytes || resource.dimension != TextureDimension::k2D || resource.width != target.extent.width || resource.height != target.extent.height || mip != 0 || resource.baseArray != 0) {
+        char text[320];
+        std::snprintf(text, sizeof(text), "AGC graphics: storage image access to the %s plane of depth surface 0x%llx (%ux%u, %u-byte texels) as a %ux%u image of guest format %u (%u-byte texels), dimension %d, mip %u, slice %u is not implemented",
+                      stencil ? "stencil" : "depth", static_cast<unsigned long long>(target.address), target.extent.width, target.extent.height, planeBytes, resource.width, resource.height, resource.format, texelBytes,
+                      static_cast<int>(resource.dimension), mip, resource.baseArray);
+        throw std::runtime_error(text);
+    }
+    return DepthPlane{surface.image, static_cast<VkImageAspectFlags>(stencil ? VK_IMAGE_ASPECT_STENCIL_BIT : VK_IMAGE_ASPECT_DEPTH_BIT), target.extent, surface.Staging()};
+}
+
+namespace {
+
+void copyPlane(const Context& context, VkCommandBuffer commands, const DepthPlane& plane, VkImage storage, bool load) {
+    const auto barrier = [&](VkPipelineStageFlags sourceStage, VkPipelineStageFlags destinationStage, VkAccessFlags sourceAccess, VkAccessFlags destinationAccess) {
+        RecordMemoryBarrier(context, commands, sourceStage, destinationStage, sourceAccess, destinationAccess);
+    };
+    VkBufferImageCopy planeRegion{};
+    planeRegion.imageSubresource = {plane.aspect, 0, 0, 1};
+    planeRegion.imageExtent = {plane.extent.width, plane.extent.height, 1};
+    VkBufferImageCopy storageRegion = planeRegion;
+    storageRegion.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    const auto toBuffer = context.Function<PFN_vkCmdCopyImageToBuffer>("vkCmdCopyImageToBuffer");
+    const auto toImage = context.Function<PFN_vkCmdCopyBufferToImage>("vkCmdCopyBufferToImage");
+    constexpr VkAccessFlags anyWrite = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+    constexpr VkAccessFlags anyAccess = anyWrite | VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT;
+    barrier(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, anyWrite, VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT);
+    if (load) toBuffer(commands, plane.image, VK_IMAGE_LAYOUT_GENERAL, plane.staging, 1, &planeRegion);
+    else toBuffer(commands, storage, VK_IMAGE_LAYOUT_GENERAL, plane.staging, 1, &storageRegion);
+    barrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT);
+    if (load) toImage(commands, plane.staging, storage, VK_IMAGE_LAYOUT_GENERAL, 1, &storageRegion);
+    else toImage(commands, plane.staging, plane.image, VK_IMAGE_LAYOUT_GENERAL, 1, &planeRegion);
+    barrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, anyAccess);
+}
+
+}
+
+void RecordDepthPlaneLoad(const Context& context, VkCommandBuffer commands, const DepthPlane& plane, VkImage storage) {
+    copyPlane(context, commands, plane, storage, true);
+}
+
+void RecordDepthPlaneStore(const Context& context, VkCommandBuffer commands, const DepthPlane& plane, VkImage storage) {
+    copyPlane(context, commands, plane, storage, false);
 }
 
 bool DepthSurfaceAt(std::uint64_t address) {

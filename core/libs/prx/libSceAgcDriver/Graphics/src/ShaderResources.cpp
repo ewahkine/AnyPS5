@@ -375,7 +375,7 @@ void logLookup(const LookupRecord& record) {
     log.push_back(record);
 }
 
-std::shared_ptr<StorageTexture> cachedStorageTexture(const Context& context, std::span<const std::uint32_t> words, const GuestTextureResource& resource, std::uint32_t mip, std::uint64_t guestBytes = 0);
+std::shared_ptr<StorageTexture> cachedStorageTexture(const Context& context, std::span<const std::uint32_t> words, const GuestTextureResource& resource, std::uint32_t mip, std::uint64_t guestBytes = 0, bool depthPlane = false);
 
 std::uint64_t heldBytes(const StorageTexture& image) {
     return std::max<std::uint64_t>(image.AllocationBytes(), image.GuestBytes());
@@ -800,8 +800,8 @@ GuestTextureResource StorageSurface(const Context& context, const GuestTextureRe
 }
 
 // `guestBytes` is the surface size when the caller described the surface already (0: described here).
-std::shared_ptr<StorageTexture> cachedStorageTexture(const Context& context, std::span<const std::uint32_t> words, const GuestTextureResource& viewed, std::uint32_t mip, std::uint64_t guestBytes) {
-    if (DepthSurfaceAt(viewed.baseAddress)) {
+std::shared_ptr<StorageTexture> cachedStorageTexture(const Context& context, std::span<const std::uint32_t> words, const GuestTextureResource& viewed, std::uint32_t mip, std::uint64_t guestBytes, bool depthPlane) {
+    if (!depthPlane && DepthSurfaceAt(viewed.baseAddress)) {
         char text[112];
         std::snprintf(text, sizeof(text), "AGC graphics: storage image access to depth/stencil surface 0x%llx is not implemented", static_cast<unsigned long long>(viewed.baseAddress));
         throw std::runtime_error(text);
@@ -2170,7 +2170,7 @@ bool ShaderResources::Revalidate(std::span<const CompiledShader> shaders, ProofR
                         if (storageIndex >= storageTextures.size()) return false;
                         std::shared_ptr<StorageTexture> expected;
                         if (SameAsPreviousStorageElement(binding, element) && StorageDedupeEnabled()) expected = storageTextures[storageIndex - 1];
-                        else expected = cachedStorageTexture(context, words, DecodeTextureResource(words), storageMips[storageIndex]);
+                        else expected = cachedStorageTexture(context, words, DecodeTextureResource(words), storageMips[storageIndex], 0, std::ranges::any_of(depthPlanes, [&](const auto& bound) { return bound.storage == storageIndex; }));
                         if (expected != storageTextures[storageIndex]) return false;
                         ++storageIndex;
                     }
@@ -3141,18 +3141,21 @@ void ShaderResources::resolveImageBinding(const ShaderRecompiler::DescriptorBind
         const auto mip = std::min(resource.baseLevel + mipOffset, resource.mipCount - 1u);
         Require(resource.minLod <= mip * 256u, "guest storage texture descriptor clamps its minimum LOD above the level it addresses, which is not implemented");
         const auto guestBytes = record != nullptr && record->decoded ? record->guestBytes : DescribeSurface(resource).guestBytes;
-        if (DepthSurfaceAt(resource.baseAddress)) {
+        std::optional<DepthPlane> plane;
+        if (DepthSurfaceAt(resource.baseAddress) && !drawBuild) plane = DepthPlaneForStorage(context, resource, mip);
+        if (!plane && DepthSurfaceAt(resource.baseAddress)) {
             const bool written = element >= binding.imageWritten.size() || binding.imageWritten[element];
             const bool atomic = element < binding.imageAtomic.size() && binding.imageAtomic[element];
             char text[512];
-            std::snprintf(text, sizeof(text), "AGC graphics: storage image %s of %s at 0x%llx as a %ux%u image of guest format %u (vk %d), tile mode %u, dimension %d, mip %u is not implemented (T# %08x %08x %08x %08x %08x %08x %08x %08x)",
+            std::snprintf(text, sizeof(text), "AGC graphics: storage image %s of %s at 0x%llx as a %ux%u image of guest format %u (vk %d), tile mode %u, dimension %d, mip %u in a draw are not implemented (T# %08x %08x %08x %08x %08x %08x %08x %08x)",
                           atomic ? "atomics" : written ? "writes" : "reads", DescribeDepthSurfaceAt(resource.baseAddress).c_str(), static_cast<unsigned long long>(resource.baseAddress), resource.width, resource.height, resource.format, static_cast<int>(ResolveTextureFormat(resource.format)),
                           static_cast<unsigned>(resource.tileMode), static_cast<int>(resource.dimension), mip, words[0], words[1], words[2], words[3], words[4], words[5], words[6], words[7]);
             throw std::runtime_error(text);
         }
         // The same surface as the previous element: its image was just looked up and refreshed.
         if (sameAsPrevious && StorageDedupeEnabled()) storageTextures.push_back(storageTextures.back());
-        else storageTextures.push_back(cachedStorageTexture(context, words, resource, mip, guestBytes));
+        else storageTextures.push_back(cachedStorageTexture(context, words, resource, mip, guestBytes, plane.has_value()));
+        if (plane) depthPlanes.push_back({*plane, storageTextures.size() - 1u});
         storageMips.push_back(mip);
         storageKeys.push_back(resource.dccAddress);
         storageFirstLayer.push_back(firstLayer);
@@ -3399,6 +3402,16 @@ void ShaderResources::WriteBack() {
     if (SkipWriteBack()) return;
     for (std::size_t index = 0; index < storageTextures.size(); ++index) {
         if (storageWritten[index]) storageTextures[index]->MarkDirty();
+    }
+}
+
+void ShaderResources::RecordDepthPlaneLoads(VkCommandBuffer commands) const {
+    for (const auto& bound : depthPlanes) RecordDepthPlaneLoad(context, commands, bound.plane, storageTextures[bound.storage]->Image());
+}
+
+void ShaderResources::RecordDepthPlaneStores(VkCommandBuffer commands) const {
+    for (const auto& bound : depthPlanes) {
+        if (storageWritten[bound.storage] || storageAtomic[bound.storage] || storageAtomic64[bound.storage]) RecordDepthPlaneStore(context, commands, bound.plane, storageTextures[bound.storage]->Image());
     }
 }
 
