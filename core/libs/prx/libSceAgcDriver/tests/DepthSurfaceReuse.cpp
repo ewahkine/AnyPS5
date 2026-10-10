@@ -224,7 +224,9 @@ void StoragePlaneTests(const Context& context) {
     Require(storageRejected(context, {depth, FormatR8Uint, 128, 64}), "an 8-bit storage view of a 32-bit depth plane must be refused");
     Require(storageRejected(context, {stencil, FormatR8Uint, 64, 64}), "a storage view of another extent must be refused");
     Require(storageRejected(context, {stencil, FormatR8Uint, 128, 64}, 1), "a storage view of another level must be refused");
-    Require(storageRejected(context, {stencil, FormatR8Uint, 128, 64, TileDepth64KB, Type2DArray, 0}), "a 2D array storage view must be refused");
+    const auto arrayPlane = storagePlane(context, {stencil, FormatR8Uint, 128, 64, TileDepth64KB, Type2DArray, 0});
+    Require(arrayPlane.has_value() && arrayPlane->aspect == VK_IMAGE_ASPECT_STENCIL_BIT, "a one-slice 2D array storage view of the stencil plane must bind the stencil aspect");
+    Require(storageRejected(context, {stencil, FormatR8Uint, 128, 64, TileDepth64KB, Type2DArray, 1}), "a two-slice 2D array storage view must be refused");
 
     const auto storage = newHandle<VkImage>();
     copies().clear();
@@ -261,6 +263,8 @@ void RunDepthSurfaceReuseTests() {
     Require(lookup(context, {depth32, FormatR32Uint, 384, 384}) != nullptr, "a 32-bit raw depth bits view of a D32 surface must sample its depth plane");
     Require(lookup(context, {depth16, FormatR16Uint, 256, 256}) != nullptr, "a 16-bit raw depth bits view of a D16 surface must sample its depth plane");
 
+    const auto arrayTexture = lookup(context, {depth32, FormatR32Float, 384, 384, TileDepth64KB, Type2DArray, 0});
+    Require(arrayTexture != nullptr && arrayTexture->SampledViewRange(false).type == VK_IMAGE_VIEW_TYPE_2D_ARRAY && arrayTexture->FirstLayerView() != VK_NULL_HANDLE && arrayTexture->SampledViewRange(true).type == VK_IMAGE_VIEW_TYPE_2D, "a one-slice 2D array view of a depth surface must sample its depth plane through array and first-layer views");
     Require(lookup(context, {depth32, FormatR32Float, 192, 192}) == nullptr, "a view of another extent over a depth surface must be read as reused memory");
     Require(lookup(context, {depth32, FormatR11G11B10Float, 384, 384}) == nullptr, "an R11G11B10 view of a D32 surface's own extent must be read as reused memory");
     Require(lookup(context, {depth32, FormatR32Float, 512, 512, TileDepth64KB, Type2DArray, 5}) == nullptr, "a 2D array view of another extent over a depth surface must be read as reused memory");

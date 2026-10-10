@@ -504,17 +504,21 @@ Texture::Texture(const Context& context, const std::shared_ptr<StorageTexture>& 
     }
 }
 
-Texture::Texture(const Context& context, VkImage depthImage, VkFormat depthFormat, VkImageAspectFlags aspect, VkComponentMapping components) : context(context) {
+Texture::Texture(const Context& context, VkImage depthImage, VkFormat depthFormat, VkImageAspectFlags aspect, VkComponentMapping components, bool array) : context(context) {
     layout = VK_IMAGE_LAYOUT_GENERAL;
     VkImageViewCreateInfo viewInfo{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
     viewInfo.image = depthImage;
-    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.viewType = array ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D;
     viewInfo.format = depthFormat;
     viewFormat = depthFormat;
     viewInfo.components = components;
     viewInfo.subresourceRange = {aspect, 0, 1, 0, 1};
     Check(context.Function<PFN_vkCreateImageView>("vkCreateImageView")(context.device, &viewInfo, nullptr, &view), "vkCreateImageView depth plane");
     viewRange = {viewInfo.viewType, viewInfo.subresourceRange.levelCount, viewInfo.subresourceRange.layerCount};
+    if (!array) return;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    Check(context.Function<PFN_vkCreateImageView>("vkCreateImageView")(context.device, &viewInfo, nullptr, &firstLayerView), "vkCreateImageView depth plane first layer");
+    firstLayerRange = {viewInfo.viewType, viewInfo.subresourceRange.levelCount, viewInfo.subresourceRange.layerCount};
 }
 
 Texture::~Texture() {

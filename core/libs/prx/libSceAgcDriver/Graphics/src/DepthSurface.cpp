@@ -108,14 +108,15 @@ public:
         const auto expected = stencil ? VK_FORMAT_R8_UINT : d16 ? VK_FORMAT_R16_UNORM : VK_FORMAT_R32_SFLOAT;
         const auto format = ResolveTextureFormat(resource.format);
         const bool depthBits = !stencil && words.size() >= 4 && ShaderRecompiler::DepthBitsTextureWidth(words[1], words[3]) == (d16 ? 16u : 32u);
-        if ((format != expected && !depthBits) || resource.dimension != TextureDimension::k2D || resource.width != target.extent.width || resource.height != target.extent.height || resource.baseLevel != 0 || resource.lastLevel != 0 || resource.baseArray != 0) {
+        const bool array = resource.dimension == TextureDimension::k2DArray;
+        if ((format != expected && !depthBits) || (resource.dimension != TextureDimension::k2D && !(array && resource.depthOrLastArray == 0)) || resource.width != target.extent.width || resource.height != target.extent.height || resource.baseLevel != 0 || resource.lastLevel != 0 || resource.baseArray != 0) {
             char text[448];
             std::snprintf(text, sizeof(text), "AGC graphics: sampling the %s plane of depth surface 0x%llx (%ux%u, vk format %d) as a %ux%u texture of guest format %u (vk %d), tile mode %u, dimension %d, levels %u-%u, slice %u is not implemented (T# %08x %08x %08x %08x %08x %08x %08x %08x)",
                           stencil ? "stencil" : "depth", static_cast<unsigned long long>(target.address), target.extent.width, target.extent.height, static_cast<int>(target.format), resource.width, resource.height, resource.format, static_cast<int>(format),
                           static_cast<unsigned>(resource.tileMode), static_cast<int>(resource.dimension), resource.baseLevel, resource.lastLevel, resource.baseArray, key[0], key[1], key[2], key[3], key[4], key[5], key[6], key[7]);
             throw std::runtime_error(text);
         }
-        auto texture = std::make_shared<Texture>(context, image, target.format, stencil ? VK_IMAGE_ASPECT_STENCIL_BIT : VK_IMAGE_ASPECT_DEPTH_BIT, components);
+        auto texture = std::make_shared<Texture>(context, image, target.format, stencil ? VK_IMAGE_ASPECT_STENCIL_BIT : VK_IMAGE_ASPECT_DEPTH_BIT, components, array);
         textures.emplace(key, texture);
         return texture;
     }
@@ -268,11 +269,12 @@ std::optional<DepthPlane> DepthPlaneForStorage(const Context& context, const Gue
         throw std::runtime_error("AGC graphics: storage image access to the depth plane of vk format " + std::to_string(target.format) + " is not implemented");
     }
     const auto texelBytes = BytesPerElement(resource.format);
-    if (texelBytes != planeBytes || resource.dimension != TextureDimension::k2D || resource.width != target.extent.width || resource.height != target.extent.height || mip != 0 || resource.baseArray != 0) {
+    const bool singleSlice = resource.dimension == TextureDimension::k2D || (resource.dimension == TextureDimension::k2DArray && resource.depthOrLastArray == 0);
+    if (texelBytes != planeBytes || !singleSlice || resource.width != target.extent.width || resource.height != target.extent.height || mip != 0 || resource.baseArray != 0) {
         char text[320];
-        std::snprintf(text, sizeof(text), "AGC graphics: storage image access to the %s plane of depth surface 0x%llx (%ux%u, %u-byte texels) as a %ux%u image of guest format %u (%u-byte texels), dimension %d, mip %u, slice %u is not implemented",
+        std::snprintf(text, sizeof(text), "AGC graphics: storage image access to the %s plane of depth surface 0x%llx (%ux%u, %u-byte texels) as a %ux%u image of guest format %u (%u-byte texels), dimension %d, mip %u, slices %u-%u is not implemented",
                       stencil ? "stencil" : "depth", static_cast<unsigned long long>(target.address), target.extent.width, target.extent.height, planeBytes, resource.width, resource.height, resource.format, texelBytes,
-                      static_cast<int>(resource.dimension), mip, resource.baseArray);
+                      static_cast<int>(resource.dimension), mip, resource.baseArray, resource.dimension == TextureDimension::k2DArray ? resource.depthOrLastArray : resource.baseArray);
         throw std::runtime_error(text);
     }
     return DepthPlane{surface.image, static_cast<VkImageAspectFlags>(stencil ? VK_IMAGE_ASPECT_STENCIL_BIT : VK_IMAGE_ASPECT_DEPTH_BIT), target.extent, surface.Staging()};
