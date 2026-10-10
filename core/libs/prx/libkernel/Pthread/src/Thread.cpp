@@ -771,7 +771,8 @@ namespace {
 
 struct CxxThreadApiRegistration {
     CxxThreadApiRegistration() {
-        CxxThreadApiRegister_nid_no_patch({scePthreadCreate, scePthreadJoin, scePthreadSelf});
+        static const CxxThreadApi api{scePthreadCreate, scePthreadJoin, scePthreadSelf};
+        CxxThreadApiRegister_nid_no_patch(&api);
     }
 };
 const CxxThreadApiRegistration cxxThreadApiRegistration;

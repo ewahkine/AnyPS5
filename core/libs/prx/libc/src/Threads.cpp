@@ -217,11 +217,11 @@ int APS5_VABI _Thrd_join_nid_postfix(Pthread thread, int* result) {
 
 }
 
-void CxxThreadApiRegister_nid_no_patch(const CxxThreadApi& api) {
-    if (api.create == nullptr || api.join == nullptr || api.self == nullptr)
+void CxxThreadApiRegister_nid_no_patch(const CxxThreadApi* api) {
+    if (api == nullptr || api->create == nullptr || api->join == nullptr || api->self == nullptr)
         throw std::invalid_argument("libc: incomplete thread API");
-    static const CxxThreadApi registered = api;
-    if (registered.create != api.create || registered.join != api.join || registered.self != api.self)
+    static const CxxThreadApi registered = *api;
+    if (registered.create != api->create || registered.join != api->join || registered.self != api->self)
         throw std::runtime_error("libc: cannot replace the registered thread API");
     threadApi.store(&registered, std::memory_order_release);
 }

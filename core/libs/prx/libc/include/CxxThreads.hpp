@@ -9,6 +9,6 @@ struct CxxThreadApi {
     Pthread (APS5_VABI *self)();
 };
 
-void CxxThreadApiRegister_nid_no_patch(const CxxThreadApi& api);
+extern "C" void CxxThreadApiRegister_nid_no_patch(const CxxThreadApi* api);
 
 #endif
