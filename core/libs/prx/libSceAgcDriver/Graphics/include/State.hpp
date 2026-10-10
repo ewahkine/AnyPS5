@@ -54,6 +54,11 @@ struct ColorTarget {
     std::uint32_t slot = 0;
     std::uint32_t depth = 1;
     std::uint32_t depthSlice = 0;
+    std::uint32_t layers = 1;
+    std::uint32_t baseLayer = 0;
+    std::uint32_t arrayLayers = 1;
+    std::uint64_t arrayAddress = 0;
+    std::uint64_t layerBytes = 0;
     std::uint32_t exportIndex = 0;
     bool uintExport = false;
     std::uint32_t pipeBankXor = 0;
@@ -97,6 +102,7 @@ struct State {
     VkExtent2D renderExtent;
     VkPrimitiveTopology topology;
     bool primitiveRestart = false;
+    std::uint32_t vertexOutControl = 0;
     VkViewport viewport;
     bool negativeOneToOne;
     bool depthClamp = false;
@@ -116,6 +122,8 @@ std::array<ShaderRecompiler::ColorExportPacking, 8> ExportPackings(const State& 
 ColorTarget DecodeColorBuffer(const Registers& context, std::uint32_t slot);
 std::size_t CmaskBytes(std::uint32_t width, std::uint32_t height);
 std::uint32_t ColorWriteMask(const Registers& context);
+std::uint32_t VertexLayerControl(std::uint32_t paClVsOutCntl);
+std::uint32_t RenderLayers(const State& state);
 
 struct ColorMetadataPass {
     enum class Mode { EliminateFastClear, DccDecompress };

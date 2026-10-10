@@ -493,7 +493,10 @@ std::unique_ptr<RegisteredPreparation> PlanRegistered(const ShaderSnapshot& snap
         if (firstUser == 0) userCount += 8;
     }
     plan->userData.resize(userCount);
-    if (stage != Stage::Compute && stage != Stage::Fragment && snapshot.type != 6) vertex = Graphics::DecodeVertexStageInfo(snapshot.header, snapshot.headerAddress, plan->userData, nullptr, true);
+    if (stage != Stage::Compute && stage != Stage::Fragment && snapshot.type != 6) {
+        vertex = Graphics::DecodeVertexStageInfo(snapshot.header, snapshot.headerAddress, plan->userData, nullptr, true);
+        if (const auto control = state.context.find(0x207); control != state.context.end()) vertex->paClVsOutCntl = Graphics::VertexLayerControl(control->second);
+    }
     plan->swappc = {vertex.has_value(), firstUser, userCount};
     if (deferred != nullptr) {
         if (const auto counter = ShaderRecompiler::UnresolvableSwappcTarget(plan->decoded, &plan->swappc)) {
@@ -654,7 +657,10 @@ std::vector<PreparedGraphicsStage> PrepareGraphicsStages(const DrawDecode& decod
         const bool fragment = program.binary.stage == ShaderRecompiler::ShaderStage::Fragment;
         const auto wave = fragment ? decoded.state.stages.fragmentWaveSize : decoded.state.stages.vertexWaveSize;
         std::optional<ShaderRecompiler::ShaderVertexStageInfo> vertex;
-        if (!fragment) vertex = Graphics::DecodeVertexStageInfo(program.binary.header, program.binary.headerAddress, program.userData, nullptr, true);
+        if (!fragment) {
+            vertex = Graphics::DecodeVertexStageInfo(program.binary.header, program.binary.headerAddress, program.userData, nullptr, true);
+            vertex->paClVsOutCntl = decoded.state.vertexOutControl;
+        }
         pushOffset = Graphics::StagePushOffset(pushOffset, program.binary.stage, fixedSlots);
         const auto offset = pushOffset;
         const auto room = (fixedSlots && fragment ? Graphics::PipelinePushSlotBytes : capacity) - pushOffset % Graphics::PipelinePushSlotBytes;

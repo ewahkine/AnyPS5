@@ -65,6 +65,22 @@ GuestTextureResource SurfaceForTarget(const ColorTarget& color) {
     Require(color.tileMode != ColorTileMode::Linear, "linear color targets are not resident");
     const bool chain = color.mipCount > 1;
     GuestTextureResource surface{};
+    if (color.layers > 1) {
+        surface.baseAddress = color.arrayAddress;
+        surface.pipeBankXor = color.pipeBankXor;
+        surface.width = color.extent.width;
+        surface.height = color.extent.height;
+        surface.depthOrLastArray = color.arrayLayers - 1u;
+        surface.mipCount = 1;
+        surface.tileMode = ColorTextureTileMode(color.tileMode);
+        surface.dimension = TextureDimension::k2DArray;
+        surface.format = GuestFormatFor(color.format, color.elementBytes);
+        surface.dstSelX = 4;
+        surface.dstSelY = 5;
+        surface.dstSelZ = 6;
+        surface.dstSelW = 7;
+        return surface;
+    }
     surface.baseAddress = chain ? color.surfaceAddress : color.address;
     surface.pipeBankXor = color.pipeBankXor;
     surface.width = chain ? color.surfaceExtent.width : color.extent.width;
@@ -701,7 +717,7 @@ std::set<std::uint32_t> CachedFragmentOutputs(const Context& context, std::span<
     }
     std::set<std::uint32_t> outputs;
     try {
-        outputs = ValidateShaders(shaders, state, context.subgroup, context.fragmentShaderBarycentric, context.descriptorIndexing, context.imageInt64Atomics, context.geometryShader, context.sampleRateShading, context.bufferInt64Atomics);
+        outputs = ValidateShaders(shaders, state, context.subgroup, context.fragmentShaderBarycentric, context.descriptorIndexing, context.imageInt64Atomics, context.geometryShader, context.sampleRateShading, context.bufferInt64Atomics, context.viewportIndexLayer);
     } catch (const std::exception& error) {
         if (keyed) {
             std::lock_guard lock(validationMutex());
@@ -1831,19 +1847,22 @@ void Draw(const Context& context, const State& state, const Pm4::DrawParameters&
             binding.resident = refreshResidentTarget(context, state, color, outcome, profile, [&] {
                 auto resident = CachedStorageSurface(context, SurfaceForTarget(color));
                 Require(resident->Attachable(), "storage format cannot be a color attachment");
-                Require(color.mipCount > 1 || color.depth > 1 || resident->GuestBytes() == colorLayout.Bytes(), "resident image layout differs from the color layout");
+                Require(color.mipCount > 1 || color.depth > 1 || color.layers > 1 || resident->GuestBytes() == colorLayout.Bytes(), "resident image layout differs from the color layout");
+                Require(color.layers == 1 || resident->GuestBytes() == color.arrayLayers * color.layerBytes, "resident array image layout differs from the color slices");
                 return resident;
             });
         }
         if (binding.resident != nullptr) {
             timer.phase(PhaseReadTarget);
             binding.proxied = AttachmentProxyFormat(context, color.format) != VK_FORMAT_UNDEFINED;
-            targetViews.push_back(binding.proxied ? binding.resident->AttachmentProxyView() : binding.resident->AttachmentView(color.format, color.mip, color.depthSlice));
+            Require(!binding.proxied || color.layers == 1, "rendering into several slices of a proxied color target is unsupported");
+            targetViews.push_back(binding.proxied ? binding.resident->AttachmentProxyView() : color.layers > 1 ? binding.resident->AttachmentView(color.format, 0, color.baseLayer, color.layers) : binding.resident->AttachmentView(color.format, color.mip, color.depthSlice));
             continue;
         }
         materializeCmaskClear(context, color, nullptr);
         Require(!color.mipTail, "rendering into a packed mip tail needs the resident image of its surface");
         Require(color.depth == 1, "rendering into a 3D color target needs the resident image of its surface");
+        Require(color.layers == 1, "rendering into several slices of a color target needs the resident image of its surface");
         if (binding.gpuTiling) {
             binding.mip = ColorTargetMip(color, colorLayout);
             binding.tiled = std::make_unique<Buffer>(context, colorLayout.Bytes(), copies);
@@ -2012,7 +2031,7 @@ void Draw(const Context& context, const State& state, const Pm4::DrawParameters&
     std::vector<std::shared_ptr<StorageTexture>> owners;
     owners.reserve(targets.size());
     for (const auto& binding : targets) owners.push_back(binding.resident);
-    auto framebuffer = pipeline->AcquireFramebuffer(targetViews, owners, state.renderExtent);
+    auto framebuffer = pipeline->AcquireFramebuffer(targetViews, owners, state.renderExtent, RenderLayers(state));
     timer.phase(PhasePipeline);
     APS5_LOG_CHARS_OUT_DEBUG("Pipeline created");
     if (lean) {
@@ -2381,7 +2400,7 @@ DrawRecipeOutcome DrawWithRecipe(const Context& context, const State& state, con
     auto pipeline = recipe.pipeline.lock();
     if (pipeline == nullptr) return miss(DrawRecipeMiss::ObjectsGone);
     auto framebuffer = recipe.framebuffer.lock();
-    if (framebuffer == nullptr) framebuffer = pipeline->AcquireFramebuffer(recipe.targetViews, targets, state.renderExtent);
+    if (framebuffer == nullptr) framebuffer = pipeline->AcquireFramebuffer(recipe.targetViews, targets, state.renderExtent, RenderLayers(state));
     timer.phase(PhasePipeline);
     const auto recordStart = profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     RecordedDraw record;

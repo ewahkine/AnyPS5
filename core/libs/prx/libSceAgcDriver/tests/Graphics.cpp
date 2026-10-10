@@ -944,7 +944,7 @@ void DepthStencilTests() {
     queue.context[0x31b] = 1u << 26u;
     expectFailure([&] { AgcDriver::Graphics::DecodeState(queue); }, "mip exceeds");
     queue.context[0x31b] = 1u << 13u;
-    expectFailure([&] { AgcDriver::Graphics::DecodeState(queue); }, "several array slices");
+    expectFailure([&] { AgcDriver::Graphics::DecodeState(queue); }, "beyond the array surface");
     const auto sliced = reinterpret_cast<std::uintptr_t>(sliceMemory.data());
     queue.context[0x318] = static_cast<std::uint32_t>(sliced >> 8u);
     queue.context[0x390] = static_cast<std::uint32_t>(sliced >> 40u);
@@ -954,6 +954,11 @@ void DepthStencilTests() {
     queue.context[0x3b8] = 0x09000001;
     const auto arraySlice = AgcDriver::Graphics::DecodeState(queue);
     Require(arraySlice.color.address == sliced + 1024u && arraySlice.color.bytes == 1024u && arraySlice.color.depth == 1u, "a color view of one slice of a 2D array target did not move the target by one slice");
+    queue.context[0x31b] = 1u << 13u;
+    const auto layered = AgcDriver::Graphics::DecodeState(queue);
+    Require(layered.color.layers == 2u && layered.color.baseLayer == 0u && layered.color.arrayLayers == 2u && layered.color.arrayAddress == sliced && layered.color.address == sliced && layered.color.bytes == 2048u && AgcDriver::Graphics::RenderLayers(layered) == 2u, "a color view of both slices of a 2D array target did not span them");
+    queue.context[0x31b] = 1u | (2u << 13u);
+    expectFailure([&] { AgcDriver::Graphics::DecodeState(queue); }, "beyond the array surface");
     queue.context[0x31b] = 2u | (2u << 13u);
     expectFailure([&] { AgcDriver::Graphics::DecodeState(queue); }, "beyond the array surface");
     queue.context[0x3b8] = 0x0a000003;

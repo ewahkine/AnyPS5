@@ -220,6 +220,7 @@ struct VulkanDevice::State {
     VkPhysicalDeviceDescriptorIndexingPropertiesEXT descriptorIndexingProperties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_PROPERTIES_EXT};
     bool imageInt64Atomics = false;
     bool bufferInt64Atomics = false;
+    bool viewportIndexLayer = false;
     bool primitiveListRestart = false;
     bool depthClipControl = false;
     bool graphicsPipelineLibrary = false;
@@ -875,6 +876,12 @@ VulkanDevice::VulkanDevice(const PresentationWindow* window) : state(std::make_u
         deviceExtensions.push_back(VK_KHR_SHADER_CLOCK_EXTENSION_NAME);
         state->capabilities.push_back(spv::CapabilityShaderClockKHR);
         state->spirvExtensions.push_back("SPV_KHR_shader_clock");
+    }
+    if (hasExtension(VK_EXT_SHADER_VIEWPORT_INDEX_LAYER_EXTENSION_NAME)) {
+        deviceExtensions.push_back(VK_EXT_SHADER_VIEWPORT_INDEX_LAYER_EXTENSION_NAME);
+        state->viewportIndexLayer = true;
+        state->capabilities.push_back(spv::CapabilityShaderViewportIndexLayerEXT);
+        state->spirvExtensions.push_back("SPV_EXT_shader_viewport_index_layer");
     }
     VkPhysicalDeviceShaderAtomicInt64FeaturesKHR atomicInt64Features{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_INT64_FEATURES_KHR};
     if (hasExtension(VK_KHR_SHADER_ATOMIC_INT64_EXTENSION_NAME)) {
@@ -2731,6 +2738,7 @@ Graphics::Context VulkanDevice::buildContext() const {
     context.sampleRateShading = state->sampleRateShading;
     context.nullDescriptors = state->shaderProfile != nullptr && state->shaderProfile->NullDescriptors();
     context.bufferInt64Atomics = state->bufferInt64Atomics;
+    context.viewportIndexLayer = state->viewportIndexLayer;
     context.primitiveListRestart = state->primitiveListRestart;
     context.imageViewMinLod = state->imageViewMinLod;
     context.pipelineExecutableInfo = state->pipelineExecutableInfo;

@@ -121,13 +121,17 @@ struct Module {
                 return;
             }
             if (!input && value == spv::BuiltInPrimitiveTriangleIndicesEXT) primitiveIndices = true;
-            Require((input && ((value == spv::BuiltInWorkgroupId || value == spv::BuiltInLocalInvocationId || value == spv::BuiltInGlobalInvocationId || value == spv::BuiltInNumWorkgroups) && signature == "u32x3")) || (input && value == spv::BuiltInLocalInvocationIndex && signature == "u32") || (!input && value == spv::BuiltInPrimitiveTriangleIndicesEXT && signature == "u32x3") || (!input && value == spv::BuiltInCullPrimitiveEXT && signature == "bool"), "unsupported mesh built-in");
+            Require((input && ((value == spv::BuiltInWorkgroupId || value == spv::BuiltInLocalInvocationId || value == spv::BuiltInGlobalInvocationId || value == spv::BuiltInNumWorkgroups) && signature == "u32x3")) || (input && value == spv::BuiltInLocalInvocationIndex && signature == "u32") || (!input && value == spv::BuiltInPrimitiveTriangleIndicesEXT && signature == "u32x3") || (!input && value == spv::BuiltInCullPrimitiveEXT && signature == "bool") || (!input && value == spv::BuiltInLayer && (signature == "u32" || signature == "i32")), "unsupported mesh built-in");
             return;
         }
         const auto signature = Signature(type);
         if (vertex && storage == spv::StorageClassInput) {
             Require((value == spv::BuiltInVertexIndex || value == spv::BuiltInInstanceIndex) && signature == "i32", "unsupported vertex built-in input");
         } else if (vertex && storage == spv::StorageClassOutput) {
+            if (value == spv::BuiltInLayer) {
+                Require(signature == "u32" || signature == "i32", "unsupported vertex layer output");
+                return;
+            }
             Require(value == spv::BuiltInPosition && signature == "f32x4" && !position, "unsupported or duplicate vertex built-in output");
             position = true;
         } else {
@@ -136,7 +140,7 @@ struct Module {
     }
 };
 
-Module Inspect(const CompiledShader& compiled, const State& state, const VkPhysicalDeviceSubgroupProperties& subgroup, bool fragmentShaderBarycentric, bool descriptorIndexing, bool imageInt64Atomics, bool geometryShader, bool sampleRateShading, bool bufferInt64Atomics) {
+Module Inspect(const CompiledShader& compiled, const State& state, const VkPhysicalDeviceSubgroupProperties& subgroup, bool fragmentShaderBarycentric, bool descriptorIndexing, bool imageInt64Atomics, bool geometryShader, bool sampleRateShading, bool bufferInt64Atomics, bool viewportIndexLayer) {
     using Stage = ShaderRecompiler::ShaderStage;
     Require(compiled.program != nullptr, "missing compiled shader");
     const auto& shader = *compiled.program;
@@ -234,6 +238,7 @@ Module Inspect(const CompiledShader& compiled, const State& state, const VkPhysi
                     capability == spv::CapabilityImageQuery ||
                     (fragment && geometryShader && capability == spv::CapabilityGeometry) ||
                     (fragment && sampleRateShading && capability == spv::CapabilitySampleRateShading) ||
+                    ((vertex || evaluation) && viewportIndexLayer && capability == spv::CapabilityShaderViewportIndexLayerEXT) ||
                     capability == spv::CapabilityImageMSArray ||
                     capability == spv::CapabilityStorageImageMultisample ||
                     capability == spv::CapabilityStorageImageWriteWithoutFormat ||
@@ -284,6 +289,10 @@ Module Inspect(const CompiledShader& compiled, const State& state, const VkPhysi
                 const std::string_view extension(text, static_cast<std::size_t>(end - text));
                 if (extension == "SPV_EXT_fragment_shader_interlock") {
                     Require(fragment, "SPV_EXT_fragment_shader_interlock requires a fragment shader");
+                    break;
+                }
+                if (extension == "SPV_EXT_shader_viewport_index_layer") {
+                    Require((vertex || evaluation) && viewportIndexLayer, "SPV_EXT_shader_viewport_index_layer requires enabled VK_EXT_shader_viewport_index_layer in a vertex or tessellation evaluation shader");
                     break;
                 }
                 if (extension == "SPV_KHR_fragment_shader_barycentric") {
@@ -547,7 +556,7 @@ Module Inspect(const CompiledShader& compiled, const State& state, const VkPhysi
 
 }
 
-std::set<std::uint32_t> ValidateShaders(std::span<const CompiledShader> shaders, const State& state, const VkPhysicalDeviceSubgroupProperties& subgroup, bool fragmentShaderBarycentric, bool descriptorIndexing, bool imageInt64Atomics, bool geometryShader, bool sampleRateShading, bool bufferInt64Atomics) {
+std::set<std::uint32_t> ValidateShaders(std::span<const CompiledShader> shaders, const State& state, const VkPhysicalDeviceSubgroupProperties& subgroup, bool fragmentShaderBarycentric, bool descriptorIndexing, bool imageInt64Atomics, bool geometryShader, bool sampleRateShading, bool bufferInt64Atomics, bool viewportIndexLayer) {
     using Stage = ShaderRecompiler::ShaderStage;
     const bool tessellation = state.stages.path == ShaderPath::Tessellation;
     const bool mesh = state.stages.path == ShaderPath::Geometry;
@@ -568,7 +577,7 @@ std::set<std::uint32_t> ValidateShaders(std::span<const CompiledShader> shaders,
         Require(shaders[i].program != nullptr, "missing compiled shader");
         Require(shaders[i].stage == expected, "graphics stage order disagrees");
         for (const auto& binding : shaders[i].program->bindings) Require(binding.descriptorSet == 0, "graphics resource uses a descriptor set other than zero");
-        const auto current = Inspect(shaders[i], state, subgroup, fragmentShaderBarycentric, descriptorIndexing, imageInt64Atomics, geometryShader, sampleRateShading, bufferInt64Atomics);
+        const auto current = Inspect(shaders[i], state, subgroup, fragmentShaderBarycentric, descriptorIndexing, imageInt64Atomics, geometryShader, sampleRateShading, bufferInt64Atomics, viewportIndexLayer);
         if (i != 0) {
             for (const auto& [location, signature] : current.inputs) {
                 const auto output = previous.outputs.find(location);

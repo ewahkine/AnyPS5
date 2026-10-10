@@ -1356,7 +1356,18 @@ void verifyPixelRequestSerialization() {
     }
     request.context.pixel.reset();
     request.shader.stage = ShaderStage::Vertex;
+    request.context.vertex->paClVsOutCntl = 0x00240000u;
     const auto withoutPixel = serializer.Deserialize(serializer.Serialize(request));
+    require(withoutPixel.request.context.vertex->paClVsOutCntl == 0x00240000u, "a vertex request lost its layer export control");
+    {
+        std::vector<std::uint64_t> layeredKey;
+        std::vector<std::uint64_t> plainKey;
+        RecompileCacheKey::Build(request, layeredKey);
+        auto plain = request;
+        plain.context.vertex->paClVsOutCntl = 0;
+        RecompileCacheKey::Build(plain, plainKey);
+        require(layeredKey != plainKey, "the layer export control did not key the vertex shader");
+    }
     require(!withoutPixel.request.context.pixel.has_value() && withoutPixel.request.context.vertex.has_value() && withoutPixel.request.context.vertex->fetchAttribReg == 17u && withoutPixel.request.context.memory.size() == 1u && withoutPixel.request.context.memory[0].guestAddress == 0x60000u && withoutPixel.request.target.nonConstantImageOffsets && withoutPixel.request.layout.firstBinding == 11u && !withoutPixel.request.useCache, "a request without pixel state was misaligned");
 
     RecompileRequest minimal{};
@@ -1364,12 +1375,12 @@ void verifyPixelRequestSerialization() {
     minimal.context.waveSize = 64;
     minimal.context.pixel = ShaderPixelStageInfo{};
     const auto encoded = serializer.Serialize(minimal);
-    require(requestPrefix(encoded, 8u) == "NVNQQQ8AAAA=", "new requests did not use serialization version 15");
+    require(requestPrefix(encoded, 8u) == "NVNQQRAAAAA=", "new requests did not use serialization version 16");
     constexpr std::size_t mappingOffset = 8u + 37u + 18u + 163u;
     for (std::size_t bytes = 0; bytes < 17u; ++bytes) {
         expectFailure([&] { static_cast<void>(serializer.Deserialize(requestPrefix(encoded, mappingOffset + bytes))); }, "truncated data", "a truncated pixel mapping, packing or dual-source flag was accepted");
     }
-    for (const auto unsupported : {"NVNQQQAAAAA=", "NVNQQRAAAAA="}) {
+    for (const auto unsupported : {"NVNQQQAAAAA=", "NVNQQREAAAA="}) {
         expectFailure([&] { static_cast<void>(serializer.Deserialize(unsupported)); }, "serialization version", "an unsupported request version was accepted");
     }
 }

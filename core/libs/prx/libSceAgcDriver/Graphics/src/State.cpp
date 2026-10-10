@@ -95,9 +95,11 @@ VkConservativeRasterizationModeEXT decodeConservativeRasterization(const QueueSt
 
 // The register rules DecodeState and DrawRejection share (the precheck must reject exactly what
 // DecodeState would): the masks whose set bits are unsupported, and the depth-control verdict.
-// Render target index, viewport index and the misc export vector that carries them are accepted but
-// not routed: color targets are single-layer, so layered draws land in layer 0.
+// The viewport index is accepted but not routed: draws use one viewport, so it lands in viewport 0.
 constexpr std::uint32_t LayerExports = (1u << 18u) | (1u << 19u) | (1u << 21u) | (1u << 24u);
+constexpr std::uint32_t RenderTargetIndexExport = 1u << 18u;
+constexpr std::uint32_t ViewportIndexExport = 1u << 19u;
+constexpr std::uint32_t MiscExportVector = 1u << 21u;
 constexpr std::uint32_t DepthControlMask = ~0x007007f0u;
 // EXEC_ON_HIER_FAIL / EXEC_ON_NOOP / EXEC_IF_OVERLAPPED (bits 9, 10, 17) only force the pixel shader
 // to run, which it always does here.
@@ -562,11 +564,13 @@ State DecodeState(const QueueState& queue) {
     }
     APS5_LOG_OUT_DEBUG("Topology=%u", static_cast<unsigned>(result.topology));
     result.primitiveRestart = read(queue.userConfig, 0x24b, RegisterBank::UserConfig) != 0 && !result.rectList && result.topology != VK_PRIMITIVE_TOPOLOGY_PATCH_LIST;
-    if ((read(cx, 0x207) & LayerExports) != 0) {
+    const auto vertexOutControl = read(cx, 0x207);
+    result.vertexOutControl = VertexLayerControl(vertexOutControl);
+    if ((vertexOutControl & ViewportIndexExport) != 0) {
         static bool reported = false;
         if (!reported) {
             reported = true;
-            std::fprintf(stderr, "[gpu] layer/viewport index vertex exports are ignored (PA_CL_VS_OUT_CNTL=0x%08x)\n", read(cx, 0x207));
+            std::fprintf(stderr, "[gpu] viewport index vertex exports are ignored (PA_CL_VS_OUT_CNTL=0x%08x)\n", vertexOutControl);
         }
     }
     zero(cx, 0x207, ~LayerExports, "clip distances, layer, viewport or auxiliary vertex exports");
@@ -668,6 +672,8 @@ State DecodeState(const QueueState& queue) {
         result.colors.push_back(color);
     }
     if (result.hasColorTarget) {
+        for (const auto& color : result.colors) Require(color.layers == result.colors.front().layers, "color targets with different slice counts are unsupported");
+        Require(result.colors.front().layers == 1 || !result.depth, "rendering into several color slices with a depth target is unsupported");
         result.color = result.colors.front();
         if (result.depth) result.renderExtent = {std::min(result.renderExtent.width, result.depth->extent.width), std::min(result.renderExtent.height, result.depth->extent.height)};
     } else if (result.depth) {
@@ -792,6 +798,15 @@ std::size_t CmaskBytes(std::uint32_t width, std::uint32_t height) {
     return CmaskLayout(width, height).Bytes();
 }
 
+std::uint32_t VertexLayerControl(std::uint32_t paClVsOutCntl) {
+    if ((paClVsOutCntl & RenderTargetIndexExport) == 0 || (paClVsOutCntl & MiscExportVector) == 0) return 0;
+    return paClVsOutCntl & (RenderTargetIndexExport | MiscExportVector);
+}
+
+std::uint32_t RenderLayers(const State& state) {
+    return state.colors.empty() ? 1u : state.colors.front().layers;
+}
+
 std::uint32_t ColorWriteMask(const Registers& context) {
     auto mask = read(context, 0x8e) & read(context, 0x8f);
     for (std::uint32_t slot = 0; slot < 8; ++slot) {
@@ -819,7 +834,8 @@ ColorTarget DecodeColorBuffer(const Registers& cx, std::uint32_t slot) {
     const auto view = read(cx, 0x31b + stride);
     Require((view & ~0x3fffffffu) == 0, "reserved CB_COLOR_VIEW bits are set");
     const auto slice = view & 0x1fffu;
-    Require(slice == ((view >> 13u) & 0x1fffu), "color views of several array slices are unsupported");
+    const auto lastSlice = (view >> 13u) & 0x1fffu;
+    Require(lastSlice >= slice, "the color view ends before its first slice");
     const auto viewMip = (view >> 26u) & 0xfu;
     zero(cx, 0x31d + stride, ~0x20000u, "color samples, fragments or destination alpha override");
     const auto attrib2 = read(cx, 0x3b0 + slot);
@@ -859,9 +875,24 @@ ColorTarget DecodeColorBuffer(const Registers& cx, std::uint32_t slot) {
         color.pipeBankXor = static_cast<std::uint32_t>(color.surfaceAddress & (ColorTileModeBlockBytes(color.tileMode) - 1u));
         color.surfaceAddress -= color.pipeBankXor;
     }
-    if (slice != 0 && !volume) color.surfaceAddress += slice * ComputeSurfaceSize(ComputeElementMipLayout(ColorTextureTileMode(color.tileMode), color.elementBytes, color.surfaceExtent.width, color.surfaceExtent.height, color.mipCount), 1);
+    if (lastSlice != slice) {
+        Require(!volume, "rendering into several slices of a 3D color target is unsupported");
+        Require(maxMip == 0, "rendering into several slices of a mipmapped array color target is unsupported");
+        Require((info & 0x10002000u) == 0, "rendering into several slices of a DCC or CMASK color target is unsupported");
+        Require(lastSlice <= (attrib3 & 0x1fffu), "the color view slices are beyond the array surface");
+        color.layers = lastSlice - slice + 1u;
+        color.baseLayer = slice;
+        color.arrayLayers = (attrib3 & 0x1fffu) + 1u;
+        color.arrayAddress = color.surfaceAddress;
+    }
+    if ((slice != 0 || color.layers > 1) && !volume) color.layerBytes = ComputeSurfaceSize(ComputeElementMipLayout(ColorTextureTileMode(color.tileMode), color.elementBytes, color.surfaceExtent.width, color.surfaceExtent.height, color.mipCount), 1);
+    if (slice != 0 && !volume) color.surfaceAddress += slice * color.layerBytes;
     color.address = color.surfaceAddress + mipOffset;
     color.bytes = colorLayout.Bytes();
+    if (color.layers > 1) {
+        Require(color.layerBytes >= color.bytes, "a color target slice is larger than its slice stride");
+        color.bytes += (color.layers - 1u) * color.layerBytes;
+    }
     GuestMemory::CheckRange(reinterpret_cast<const void*>(color.address), color.bytes, colorLayout.Alignment(), true);
     color.format = decoded.format;
     color.componentMapping = decoded.componentMapping;
