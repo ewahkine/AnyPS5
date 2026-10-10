@@ -61,6 +61,10 @@ int APS5_VABI _Mtx_init_nid_postfix(GuestMutex** slot, int type) {
     return *slot == nullptr ? ThreadNomem : ThreadSuccess;
 }
 
+int APS5_VABI _Mtx_init_with_name_nid_postfix(GuestMutex** slot, int type, const char*) {
+    return _Mtx_init_nid_postfix(slot, type);
+}
+
 void APS5_VABI _Mtx_destroy_nid_postfix(GuestMutex** slot) {
     if (slot == nullptr || *slot == nullptr) return;
     {
@@ -113,6 +117,11 @@ void APS5_VABI _Cnd_destroy_nid_postfix(GuestCond** slot) {
 
 int APS5_VABI _Cnd_broadcast_nid_postfix(GuestCond** slot) {
     CondFrom(slot, "_Cnd_broadcast")->waiters.notify_all();
+    return ThreadSuccess;
+}
+
+int APS5_VABI _Cnd_signal_nid_postfix(GuestCond** slot) {
+    CondFrom(slot, "_Cnd_signal")->waiters.notify_one();
     return ThreadSuccess;
 }
 

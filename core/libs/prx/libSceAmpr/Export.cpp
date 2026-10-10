@@ -847,11 +847,6 @@ int APS5_VABI _ZNSt7num_getIcSt19istreambuf_iteratorIcSt11char_traitsIcEEE2idE_n
     return 0;
 }
 
-int APS5_VABI _Cnd_signal_nid_postfix(void) {
-    NotImplemented_nid_no_patch(__func__);
-    return 0;
-}
-
 int APS5_VABI _Unlock_shared_ptr_spin_lock_nid_postfix(void) {
     NotImplemented_nid_no_patch(__func__);
     return 0;

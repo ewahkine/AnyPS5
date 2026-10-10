@@ -8,12 +8,14 @@
 
 extern "C" {
 int APS5_VABI _Mtx_init_nid_postfix(void**, int);
+int APS5_VABI _Mtx_init_with_name_nid_postfix(void**, int, const char*);
 void APS5_VABI _Mtx_destroy_nid_postfix(void**);
 int APS5_VABI _Mtx_lock_nid_postfix(void**);
 int APS5_VABI _Mtx_unlock_nid_postfix(void**);
 int APS5_VABI _Cnd_init_nid_postfix(void**);
 void APS5_VABI _Cnd_destroy_nid_postfix(void**);
 int APS5_VABI _Cnd_broadcast_nid_postfix(void**);
+int APS5_VABI _Cnd_signal_nid_postfix(void**);
 int APS5_VABI _Cnd_wait_nid_postfix(void**, void**);
 }
 
@@ -35,7 +37,7 @@ constexpr int Recursive = 0x100;
 
 static void MutualExclusion() {
     void* mutex = nullptr;
-    Require(_Mtx_init_nid_postfix(&mutex, Plain | Try) == 0 && mutex != nullptr);
+    Require(_Mtx_init_nid_postfix(&mutex, Try) == 0 && mutex != nullptr);
     int counter = 0;
     std::atomic<int> inside{0};
     std::array<std::thread, 8> workers;
@@ -134,9 +136,41 @@ static void WaitAndBroadcast() {
     _Mtx_destroy_nid_postfix(&mutex);
 }
 
+static void Signal() {
+    void* mutex = nullptr;
+    void* cond = nullptr;
+    Require(_Mtx_init_with_name_nid_postfix(&mutex, Plain, "condition") == 0 && mutex != nullptr);
+    Require(_Cnd_init_nid_postfix(&cond) == 0);
+    int ready = 0;
+    bool waiting = false;
+    std::thread waiter([&] {
+        Require(_Mtx_lock_nid_postfix(&mutex) == 0);
+        waiting = true;
+        while (ready == 0) Require(_Cnd_wait_nid_postfix(&cond, &mutex) == 0);
+        ready = 2;
+        Require(_Mtx_unlock_nid_postfix(&mutex) == 0);
+    });
+    for (;;) {
+        Require(_Mtx_lock_nid_postfix(&mutex) == 0);
+        const bool started = waiting;
+        if (started) {
+            ready = 1;
+            Require(_Cnd_signal_nid_postfix(&cond) == 0);
+        }
+        Require(_Mtx_unlock_nid_postfix(&mutex) == 0);
+        if (started) break;
+        std::this_thread::yield();
+    }
+    waiter.join();
+    Require(ready == 2);
+    _Cnd_destroy_nid_postfix(&cond);
+    _Mtx_destroy_nid_postfix(&mutex);
+}
+
 int main() {
     MutualExclusion();
     RecursiveOwnership();
     InvalidUse();
     WaitAndBroadcast();
+    Signal();
 }
