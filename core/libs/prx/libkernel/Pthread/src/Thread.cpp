@@ -5,6 +5,7 @@
 #include "prx/libc/include/General.hpp"
 #include "prx/libkernel/KernelErrors.hpp"
 #include "prx/libc/include/CpuTopology.hpp"
+#include "prx/libc/include/CxxThreads.hpp"
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
@@ -763,5 +764,16 @@ extern "C" {
 void APS5_VABI __pthread_cxa_finalize_nid_postfix(void* argument) {
     CxaFinalize_nid_no_patch(argument);
 }
+
+}
+
+namespace {
+
+struct CxxThreadApiRegistration {
+    CxxThreadApiRegistration() {
+        CxxThreadApiRegister_nid_no_patch({scePthreadCreate, scePthreadJoin, scePthreadSelf});
+    }
+};
+const CxxThreadApiRegistration cxxThreadApiRegistration;
 
 }
