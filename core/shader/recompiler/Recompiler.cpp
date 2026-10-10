@@ -1116,6 +1116,20 @@ bool MatchesPreparedShader(const RecompileRequest& request, const SourceHandle& 
     return handle.source->code.data() == request.shader.code.data() || std::ranges::equal(handle.source->code, request.shader.code);
 }
 
+std::string DescribePreparedMismatch(const RecompileRequest& request, const SourceHandle& handle) {
+    if (handle.source == nullptr || handle.artifact == nullptr) return "no artifact";
+    const auto& layout = request.layout;
+    if (layout.descriptorSet != handle.artifact->layout.descriptorSet || layout.firstBinding != handle.artifact->layout.firstBinding) return "descriptor binding";
+    std::vector<std::uint64_t> key;
+    BuildPreparedShaderKey(request, key);
+    if (std::ranges::equal(key, handle.staticKey)) {
+        if (handle.source->code.size() != request.shader.code.size() || !std::ranges::equal(handle.source->code, request.shader.code)) return "code";
+        return "push data";
+    }
+    if (const auto field = RecompileCacheKey::InterfaceDifference(request, handle.staticKey); !field.empty()) return std::string(field);
+    return "host subgroup size";
+}
+
 std::span<const std::uint32_t> GetPreparedCode(const SourceHandle& handle) {
     if (handle.source == nullptr || handle.artifact == nullptr) throw std::runtime_error("ShaderRecompiler: prepared artifact is missing");
     return handle.source->code;

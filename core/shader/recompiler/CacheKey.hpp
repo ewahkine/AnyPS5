@@ -4,7 +4,10 @@
 #include "Recompiler.hpp"
 #include "RdnaDecoder/RdnaDescriptorFormat.hpp"
 #include "prx/libc/include/HostThreadLocal.hpp"
+#include <algorithm>
 #include <cstdlib>
+#include <span>
+#include <string_view>
 #include <stdexcept>
 #include <type_traits>
 
@@ -34,6 +37,21 @@ public:
         append(key, RuntimeAbi::Version);
         append(key, request.shader.stage);
         appendInterface(key, request);
+    }
+
+    static std::string_view InterfaceDifference(const RecompileRequest& request, std::span<const std::uint64_t> other) {
+        std::vector<std::uint64_t> key;
+        std::string_view difference;
+        const auto mark = [&](std::string_view field) {
+            if (!difference.empty()) return;
+            if (key.size() > other.size() || !std::ranges::equal(key, other.first(key.size()))) difference = field;
+        };
+        append(key, RuntimeAbi::Version);
+        mark("runtime ABI");
+        append(key, request.shader.stage);
+        mark("stage");
+        appendInterface(key, request, mark);
+        return difference;
     }
 
     // A hash over every field Build appends except the code, the target and the probe flag: the
@@ -77,19 +95,34 @@ public:
 
 private:
     static void appendInterface(std::vector<std::uint64_t>& key, const RecompileRequest& request) {
+        appendInterface(key, request, [](std::string_view) {});
+    }
+
+    template<typename TMark>
+    static void appendInterface(std::vector<std::uint64_t>& key, const RecompileRequest& request, TMark mark) {
         append(key, request.context.waveSize);
+        mark("wave size");
         append(key, request.context.userDataBaseRegister);
         append(key, request.context.userData.size());
+        mark("user data");
         append(key, request.context.compute);
+        mark("compute stage");
         append(key, request.context.pixel);
-        append(key, request.context.vertex);
+        mark("pixel stage");
+        append(key, request.context.vertex.has_value());
+        mark("vertex stage presence");
+        if (request.context.vertex) appendVertex(key, *request.context.vertex, mark);
         append(key, request.context.floatMode);
+        mark("float mode");
         appendMesh(key, request);
+        mark("mesh state");
         appendTessellation(key, request);
-        append(key, request.target);
+        mark("tessellation state");
+        appendTarget(key, request.target, mark);
         append(key, DebugProbeActive());
         append(key, RayTracingStrict());
         append(key, RayTracingMiss());
+        mark("debug switches");
     }
 
     static void appendMesh(std::vector<std::uint64_t>& key, const RecompileRequest& request) {
@@ -187,10 +220,17 @@ private:
     }
 
     static void append(std::vector<std::uint64_t>& key, const ShaderVertexStageInfo& value) {
+        appendVertex(key, value, [](std::string_view) {});
+    }
+
+    template<typename TMark>
+    static void appendVertex(std::vector<std::uint64_t>& key, const ShaderVertexStageInfo& value, TMark mark) {
         append(key, value.fetchAttribReg);
         append(key, value.fetchBufferReg);
         append(key, value.fetchEmbedded);
+        mark("vertex fetch registers");
         append(key, value.paClVsOutCntl);
+        mark("vertex output control");
         if (value.resourcesNum > value.resources.size()) throw std::runtime_error("Shader cache: invalid vertex resource count");
         append(key, value.resourcesNum);
         for (std::uint32_t i = 0; i < value.resourcesNum; ++i) {
@@ -199,6 +239,7 @@ private:
             if (value.fetchEmbedded) destination.fetchIndex = 0;
             append(key, destination);
         }
+        mark("vertex inputs");
     }
 
     static void append(std::vector<std::uint64_t>& key, const MeshTargetLimits& value) {
@@ -224,21 +265,32 @@ private:
     }
 
     static void append(std::vector<std::uint64_t>& key, const SpirvTarget& value) {
+        appendTarget(key, value, [](std::string_view) {});
+    }
+
+    template<typename TMark>
+    static void appendTarget(std::vector<std::uint64_t>& key, const SpirvTarget& value, TMark mark) {
         append(key, value.vulkanVersion);
         append(key, value.spirvVersion);
         append(key, value.subgroupSize);
         append(key, value.bdaAbiVersion);
+        mark("SPIR-V target versions");
         append(key, value.supportedCapabilities);
         append(key, value.supportedExtensions);
+        mark("SPIR-V target capabilities");
         append(key, value.fragmentShaderBarycentricEnabled);
         append(key, value.maxWorkgroupSize);
         append(key, value.maxWorkgroupInvocations);
         append(key, value.maxWorkgroupSharedMemoryBytes);
         append(key, value.mesh);
         append(key, value.tessellation);
+        mark("SPIR-V target limits");
         append(key, value.nonConstantImageOffsets);
+        mark("SPIR-V target image offsets");
         append(key, value.srgbDecodeFormats);
+        mark("SPIR-V target sRGB decode formats");
         append(key, value.narrowSubgroupClock);
+        mark("SPIR-V target subgroup clock");
     }
 };
 
