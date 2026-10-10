@@ -970,8 +970,9 @@ void DepthStencilTests() {
     queue.context[0x31b] = 1u | (3u << 13u);
     const auto volumeSlices = AgcDriver::Graphics::DecodeState(queue);
     Require(volumeSlices.color.address == sliced && volumeSlices.color.depth == 4u && volumeSlices.color.depthSlice == 1u && volumeSlices.color.layers == 3u && volumeSlices.color.baseLayer == 1u && AgcDriver::Graphics::RenderLayers(volumeSlices) == 3u, "a color view of three 3D depth slices did not select them");
-    queue.context[0x31b] = 1u | (4u << 13u);
-    expectFailure([&] { AgcDriver::Graphics::DecodeState(queue); }, "beyond the 3D surface");
+    queue.context[0x31b] = 1u | (0x1fffu << 13u);
+    const auto clampedSlices = AgcDriver::Graphics::DecodeState(queue);
+    Require(clampedSlices.color.depthSlice == 1u && clampedSlices.color.layers == 3u && clampedSlices.color.baseLayer == 1u, "a 3D color view ending beyond its surface was not clamped to the surface");
     queue.context[0x31b] = 0;
     queue.context[0x31c] |= 0x10000000;
     const auto compressedVolume = AgcDriver::Graphics::DecodeState(queue);

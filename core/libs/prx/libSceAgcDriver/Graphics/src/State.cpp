@@ -834,7 +834,7 @@ ColorTarget DecodeColorBuffer(const Registers& cx, std::uint32_t slot) {
     const auto view = read(cx, 0x31b + stride);
     Require((view & ~0x3fffffffu) == 0, "reserved CB_COLOR_VIEW bits are set");
     const auto slice = view & 0x1fffu;
-    const auto lastSlice = (view >> 13u) & 0x1fffu;
+    auto lastSlice = (view >> 13u) & 0x1fffu;
     Require(lastSlice >= slice, "the color view ends before its first slice");
     const auto viewMip = (view >> 26u) & 0xfu;
     zero(cx, 0x31d + stride, ~0x20000u, "color samples, fragments or destination alpha override");
@@ -848,7 +848,15 @@ ColorTarget DecodeColorBuffer(const Registers& cx, std::uint32_t slot) {
     if (volume) {
         color.depth = (attrib3 & 0x1fffu) + 1u;
         Require(maxMip == 0, "mipmapped 3D color targets are unsupported");
-        Require(lastSlice < color.depth, "the color view slice is beyond the 3D surface");
+        Require(slice < color.depth, "the color view slice is beyond the 3D surface");
+        if (lastSlice >= color.depth) {
+            static bool reported = false;
+            if (!reported) {
+                reported = true;
+                std::fprintf(stderr, "[gpu] a 3D color view ends at slice %u beyond its %u-slice surface (CB_COLOR_VIEW 0x%08x, CB_COLOR_ATTRIB3 0x%08x); its slices are clamped to the surface\n", lastSlice, color.depth, view, attrib3);
+            }
+            lastSlice = color.depth - 1u;
+        }
         color.depthSlice = slice;
     } else if ((attrib3 & 0x1fffu) != 0) {
         Require(slice <= (attrib3 & 0x1fffu), "the color view slice is beyond the array surface");
