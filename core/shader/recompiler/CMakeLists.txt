@@ -228,6 +228,7 @@ function(add_shader_recompiler target runtimeTarget)
             GetPreparedCode
             PreparedShaderInvocation::TryCreate
             MatchesPreparedShader
+            DescribePreparedMismatch
             GetPreparedArtifact
             MaterializeShader
             ResolveSource
