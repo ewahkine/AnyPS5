@@ -2,6 +2,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <iterator>
+#include <stdexcept>
+#include <string>
 
 namespace GuestRune {
 
@@ -106,6 +109,16 @@ int APS5_VABI iswspace_nid_postfix(std::uint32_t c) { return GuestRune::Is(c, Gu
 int APS5_VABI iswupper_nid_postfix(std::uint32_t c) { return GuestRune::Is(c, GuestRune::Upper); }
 int APS5_VABI iswxdigit_nid_postfix(std::uint32_t c) { return GuestRune::Is(c, GuestRune::Hex); }
 int APS5_VABI iswctype_nid_postfix(std::uint32_t c, std::uint64_t mask) { return GuestRune::Is(c, mask); }
+
+int APS5_VABI _Iswctype_nid_postfix(std::uint32_t c, std::uint32_t category) {
+    static constexpr std::uint64_t masks[] = {
+        0, GuestRune::Alpha | GuestRune::Number, GuestRune::Alpha, 0, GuestRune::Digit, 0,
+        GuestRune::Lower, 0, 0, GuestRune::Space, GuestRune::Upper, GuestRune::Hex,
+    };
+    if (category >= std::size(masks) || masks[category] == 0)
+        throw std::runtime_error("_Iswctype: unsupported category " + std::to_string(category));
+    return GuestRune::Is(c, masks[category]);
+}
 
 std::uint64_t APS5_VABI wctype_nid_postfix(const char* property) {
     static constexpr struct {

@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <stdexcept>
 #include <source_location>
 
 extern "C" {
@@ -35,6 +36,7 @@ int APS5_VABI iswspace_nid_postfix(std::uint32_t);
 int APS5_VABI iswupper_nid_postfix(std::uint32_t);
 int APS5_VABI iswxdigit_nid_postfix(std::uint32_t);
 int APS5_VABI iswctype_nid_postfix(std::uint32_t, std::uint64_t);
+int APS5_VABI _Iswctype_nid_postfix(std::uint32_t, std::uint32_t);
 std::uint64_t APS5_VABI wctype_nid_postfix(const char*);
 std::uint32_t APS5_VABI towlower_nid_postfix(std::uint32_t);
 std::uint32_t APS5_VABI towupper_nid_postfix(std::uint32_t);
@@ -95,13 +97,14 @@ int main() {
         std::uint64_t mask;
         int (APS5_VABI* wide)(std::uint32_t);
         int (APS5_VABI* narrow)(int);
+        std::uint32_t category;
     } wide[] = {
-        {"alnum", 0x400100, iswalnum_nid_postfix, nullptr}, {"alpha", 0x100, iswalpha_nid_postfix, isalpha_nid_postfix},
-        {"blank", 0x20000, iswblank_nid_postfix, isblank_nid_postfix}, {"cntrl", 0x200, iswcntrl_nid_postfix, iscntrl_nid_postfix},
-        {"digit", 0x400, iswdigit_nid_postfix, isdigit_nid_postfix}, {"graph", 0x800, iswgraph_nid_postfix, isgraph_nid_postfix},
-        {"lower", 0x1000, iswlower_nid_postfix, islower_nid_postfix}, {"print", 0x40000, iswprint_nid_postfix, isprint_nid_postfix},
-        {"punct", 0x2000, iswpunct_nid_postfix, ispunct_nid_postfix}, {"space", 0x4000, iswspace_nid_postfix, isspace_nid_postfix},
-        {"upper", 0x8000, iswupper_nid_postfix, isupper_nid_postfix}, {"xdigit", 0x10000, iswxdigit_nid_postfix, isxdigit_nid_postfix},
+        {"alnum", 0x400100, iswalnum_nid_postfix, nullptr, 1}, {"alpha", 0x100, iswalpha_nid_postfix, isalpha_nid_postfix, 2},
+        {"blank", 0x20000, iswblank_nid_postfix, isblank_nid_postfix, 0}, {"cntrl", 0x200, iswcntrl_nid_postfix, iscntrl_nid_postfix, 0},
+        {"digit", 0x400, iswdigit_nid_postfix, isdigit_nid_postfix, 4}, {"graph", 0x800, iswgraph_nid_postfix, isgraph_nid_postfix, 0},
+        {"lower", 0x1000, iswlower_nid_postfix, islower_nid_postfix, 6}, {"print", 0x40000, iswprint_nid_postfix, isprint_nid_postfix, 0},
+        {"punct", 0x2000, iswpunct_nid_postfix, ispunct_nid_postfix, 0}, {"space", 0x4000, iswspace_nid_postfix, isspace_nid_postfix, 9},
+        {"upper", 0x8000, iswupper_nid_postfix, isupper_nid_postfix, 10}, {"xdigit", 0x10000, iswxdigit_nid_postfix, isxdigit_nid_postfix, 11},
     };
     for (const auto& entry : wide) {
         Require(wctype_nid_postfix(entry.name) == entry.mask);
@@ -109,8 +112,18 @@ int main() {
             const int expected = c < 256 && (entry.narrow ? entry.narrow(static_cast<int>(c)) : isalpha_nid_postfix(static_cast<int>(c)) || isdigit_nid_postfix(static_cast<int>(c)));
             Require((entry.wide(c) != 0) == (expected != 0));
             Require((iswctype_nid_postfix(c, entry.mask) != 0) == (expected != 0));
+            if (entry.category != 0) Require((_Iswctype_nid_postfix(c, entry.category) != 0) == (expected != 0));
         }
         Require(entry.wide(0xffffffff) == 0 && iswctype_nid_postfix(0xffffffff, entry.mask) == 0);
+    }
+    for (const std::uint32_t category : {0u, 3u, 5u, 7u, 8u, 12u, 13u, 0x400u}) {
+        bool threw = false;
+        try {
+            _Iswctype_nid_postfix('A', category);
+        } catch (const std::runtime_error&) {
+            threw = true;
+        }
+        Require(threw);
     }
     Require(wctype_nid_postfix("ideogram") == 0x80000 && wctype_nid_postfix("special") == 0x100000);
     Require(wctype_nid_postfix("phonogram") == 0x200000 && wctype_nid_postfix("number") == 0x400000);
