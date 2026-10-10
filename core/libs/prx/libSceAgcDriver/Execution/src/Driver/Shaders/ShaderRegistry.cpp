@@ -21,7 +21,10 @@
 #include <list>
 #include <pthread.h>
 #include <stdexcept>
+#include <string>
+#include <string_view>
 #include <thread>
+#include <vector>
 #include "RdnaDecoder/RdnaInstructionDecoder.hpp"
 
 namespace AgcDriver::DriverDetail {
@@ -397,7 +400,19 @@ struct RegisteredPreparation {
     std::array<ShaderRecompiler::MemoryRegion, 2> memory{};
     std::optional<ShaderRecompiler::RecompileRequest> request;
     std::vector<std::uint64_t> abiKey;
+    std::vector<std::uint32_t> capabilities;
+    std::vector<std::string> extensionNames;
+    std::vector<std::string_view> extensions;
 };
+
+void OwnTarget(RegisteredPreparation& plan) {
+    auto& target = plan.request->target;
+    plan.capabilities.assign(target.supportedCapabilities.begin(), target.supportedCapabilities.end());
+    plan.extensionNames.assign(target.supportedExtensions.begin(), target.supportedExtensions.end());
+    plan.extensions.assign(plan.extensionNames.begin(), plan.extensionNames.end());
+    target.supportedCapabilities = plan.capabilities;
+    target.supportedExtensions = plan.extensions;
+}
 
 std::unique_ptr<RegisteredPreparation> PlanRegistered(const ShaderSnapshot& snapshot, const VulkanDevice& device, const QueueState& state, bool registration, bool* deferred = nullptr) {
     using Stage = ShaderRecompiler::ShaderStage;
@@ -491,6 +506,7 @@ std::unique_ptr<RegisteredPreparation> PlanRegistered(const ShaderSnapshot& snap
     auto& request = plan->request.emplace(ShaderRecompiler::RecompileRequest{{stage, address, code, snapshot.headerAddress, snapshot.header}, {wave, firstUser, plan->userData, compute, pixel, vertex, plan->memory, RegisteredFloatMode(snapshot)}, stage == Stage::Compute ? device.ComputeTarget(wave) : device.Target(), {0, 0, 0, 128}, graphics});
     if (graphics && graphics->mesh) request.layout.pushConstantSizeBytes = ShaderRecompiler::MeshDrawPushOffsetBytes;
     if (pixel && device.GraphicsPipelineLibraries()) request.layout.pushConstantOffsetBytes = Graphics::FixedPushOffset(Stage::Fragment);
+    OwnTarget(*plan);
     return plan;
 }
 
