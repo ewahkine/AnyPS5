@@ -217,6 +217,18 @@ std::shared_ptr<Texture> DepthSurfaceTexture(const Context& context, std::span<c
     return (*found)->Sampled(words, resource, components);
 }
 
+std::string DescribeDepthSurfaceAt(std::uint64_t address) {
+    std::lock_guard lock(surfacesMutex());
+    for (const auto& surface : surfaces()) {
+        const auto& target = surface->target;
+        if (target.address != address && target.stencilAddress != address) continue;
+        char text[128];
+        std::snprintf(text, sizeof(text), "the %s plane of a %ux%u depth surface of vk format %d", target.address == address ? "depth" : "stencil", target.extent.width, target.extent.height, static_cast<int>(target.format));
+        return text;
+    }
+    return "no depth surface";
+}
+
 bool DepthSurfaceAt(std::uint64_t address) {
     std::lock_guard lock(surfacesMutex());
     return std::any_of(surfaces().begin(), surfaces().end(), [&](const auto& surface) { return surface->target.address == address || surface->target.stencilAddress == address; });

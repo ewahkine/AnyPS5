@@ -3141,6 +3141,15 @@ void ShaderResources::resolveImageBinding(const ShaderRecompiler::DescriptorBind
         const auto mip = std::min(resource.baseLevel + mipOffset, resource.mipCount - 1u);
         Require(resource.minLod <= mip * 256u, "guest storage texture descriptor clamps its minimum LOD above the level it addresses, which is not implemented");
         const auto guestBytes = record != nullptr && record->decoded ? record->guestBytes : DescribeSurface(resource).guestBytes;
+        if (DepthSurfaceAt(resource.baseAddress)) {
+            const bool written = element >= binding.imageWritten.size() || binding.imageWritten[element];
+            const bool atomic = element < binding.imageAtomic.size() && binding.imageAtomic[element];
+            char text[512];
+            std::snprintf(text, sizeof(text), "AGC graphics: storage image %s of %s at 0x%llx as a %ux%u image of guest format %u (vk %d), tile mode %u, dimension %d, mip %u is not implemented (T# %08x %08x %08x %08x %08x %08x %08x %08x)",
+                          atomic ? "atomics" : written ? "writes" : "reads", DescribeDepthSurfaceAt(resource.baseAddress).c_str(), static_cast<unsigned long long>(resource.baseAddress), resource.width, resource.height, resource.format, static_cast<int>(ResolveTextureFormat(resource.format)),
+                          static_cast<unsigned>(resource.tileMode), static_cast<int>(resource.dimension), mip, words[0], words[1], words[2], words[3], words[4], words[5], words[6], words[7]);
+            throw std::runtime_error(text);
+        }
         // The same surface as the previous element: its image was just looked up and refreshed.
         if (sameAsPrevious && StorageDedupeEnabled()) storageTextures.push_back(storageTextures.back());
         else storageTextures.push_back(cachedStorageTexture(context, words, resource, mip, guestBytes));
