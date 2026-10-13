@@ -122,7 +122,7 @@ std::array<ShaderRecompiler::ColorExportPacking, 8> ExportPackings(const State& 
 ColorTarget DecodeColorBuffer(const Registers& context, std::uint32_t slot);
 std::size_t CmaskBytes(std::uint32_t width, std::uint32_t height);
 std::uint32_t ColorWriteMask(const Registers& context);
-std::uint32_t VertexLayerControl(std::uint32_t paClVsOutCntl);
+std::uint32_t VertexOutputControl(std::uint32_t paClVsOutCntl);
 std::uint32_t RenderLayers(const State& state);
 
 struct ColorMetadataPass {

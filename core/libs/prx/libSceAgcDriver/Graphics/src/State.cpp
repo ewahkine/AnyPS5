@@ -96,7 +96,8 @@ VkConservativeRasterizationModeEXT decodeConservativeRasterization(const QueueSt
 // The register rules DecodeState and DrawRejection share (the precheck must reject exactly what
 // DecodeState would): the masks whose set bits are unsupported, and the depth-control verdict.
 // The viewport index is accepted but not routed: draws use one viewport, so it lands in viewport 0.
-constexpr std::uint32_t LayerExports = (1u << 18u) | (1u << 19u) | (1u << 21u) | (1u << 24u);
+constexpr std::uint32_t DistanceExports = 0xffffu | (1u << 22u) | (1u << 23u);
+constexpr std::uint32_t LayerExports = (1u << 18u) | (1u << 19u) | (1u << 21u) | (1u << 24u) | DistanceExports;
 constexpr std::uint32_t RenderTargetIndexExport = 1u << 18u;
 constexpr std::uint32_t ViewportIndexExport = 1u << 19u;
 constexpr std::uint32_t MiscExportVector = 1u << 21u;
@@ -565,7 +566,7 @@ State DecodeState(const QueueState& queue) {
     APS5_LOG_OUT_DEBUG("Topology=%u", static_cast<unsigned>(result.topology));
     result.primitiveRestart = read(queue.userConfig, 0x24b, RegisterBank::UserConfig) != 0 && !result.rectList && result.topology != VK_PRIMITIVE_TOPOLOGY_PATCH_LIST;
     const auto vertexOutControl = read(cx, 0x207);
-    result.vertexOutControl = VertexLayerControl(vertexOutControl);
+    result.vertexOutControl = VertexOutputControl(vertexOutControl);
     if ((vertexOutControl & ViewportIndexExport) != 0) {
         static bool reported = false;
         if (!reported) {
@@ -573,7 +574,7 @@ State DecodeState(const QueueState& queue) {
             std::fprintf(stderr, "[gpu] viewport index vertex exports are ignored (PA_CL_VS_OUT_CNTL=0x%08x)\n", vertexOutControl);
         }
     }
-    zero(cx, 0x207, ~LayerExports, "clip distances, layer, viewport or auxiliary vertex exports");
+    zero(cx, 0x207, ~LayerExports, "point size, edge flag, kill flag, line width, shading rate or cut flag vertex exports");
     {
         const auto depthControl = read(cx, 0x200);
         const auto renderControl = find(cx, 0x000);
@@ -798,9 +799,12 @@ std::size_t CmaskBytes(std::uint32_t width, std::uint32_t height) {
     return CmaskLayout(width, height).Bytes();
 }
 
-std::uint32_t VertexLayerControl(std::uint32_t paClVsOutCntl) {
-    if ((paClVsOutCntl & RenderTargetIndexExport) == 0 || (paClVsOutCntl & MiscExportVector) == 0) return 0;
-    return paClVsOutCntl & (RenderTargetIndexExport | MiscExportVector);
+std::uint32_t VertexOutputControl(std::uint32_t paClVsOutCntl) {
+    const auto misc = paClVsOutCntl & MiscExportVector;
+    const auto layer = misc != 0 ? paClVsOutCntl & RenderTargetIndexExport : 0u;
+    const auto distances = paClVsOutCntl & DistanceExports;
+    if (layer == 0 && distances == 0) return 0;
+    return misc | layer | distances;
 }
 
 std::uint32_t RenderLayers(const State& state) {
@@ -1007,7 +1011,7 @@ std::string DrawRejection(const QueueState& queue, bool indexed) {
         if (value(queue.userConfig, 0x242, primitive) && (primitive & 0x3fu) != 1 && (primitive & 0x3fu) != 2 && (primitive & 0x3fu) != 3 && (primitive & 0x3fu) != 4 && (primitive & 0x3fu) != 5 && (primitive & 0x3fu) != 6) return "AGC graphics: primitive restart is only supported for point, line and triangle topologies";
         if (value(cx, 0x103, resetIndex) && (resetIndex & 0xffffu) != 0xffffu) return "AGC graphics: primitive restart index other than all ones is unsupported";
     }
-    if (auto reason = nonzero(cx, 0x207, ~LayerExports, "clip distances, layer, viewport or auxiliary vertex exports"); !reason.empty()) return reason;
+    if (auto reason = nonzero(cx, 0x207, ~LayerExports, "point size, edge flag, kill flag, line width, shading rate or cut flag vertex exports"); !reason.empty()) return reason;
     if (value(cx, 0x200, word)) {
         const auto renderControl = find(cx, 0x000);
         const bool depthClear = renderControl != cx.end() && (renderControl->second & 1u) != 0;

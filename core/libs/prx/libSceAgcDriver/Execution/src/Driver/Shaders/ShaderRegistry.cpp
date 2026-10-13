@@ -627,7 +627,7 @@ void PrepareRegisteredInBackground(std::shared_ptr<const ShaderSnapshot> snapsho
 
 std::uint32_t StaticVertexOutControl(const QueueState& queue) {
     const auto control = queue.context.find(0x207);
-    return control != queue.context.end() ? Graphics::VertexLayerControl(control->second) : 0u;
+    return control != queue.context.end() ? Graphics::VertexOutputControl(control->second) : 0u;
 }
 
 std::vector<PreparedGraphicsStage> PrepareGraphicsStages(const DrawDecode& decoded, const ShaderRecompiler::SpirvTarget& target) {

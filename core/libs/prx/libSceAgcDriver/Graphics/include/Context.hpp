@@ -159,6 +159,8 @@ struct Context {
     bool nullDescriptors = false;
     bool bufferInt64Atomics = false;
     bool viewportIndexLayer = false;
+    bool clipDistance = false;
+    bool cullDistance = false;
     bool primitiveListRestart = false;
     bool imageViewMinLod = false;
     bool pipelineExecutableInfo = false;

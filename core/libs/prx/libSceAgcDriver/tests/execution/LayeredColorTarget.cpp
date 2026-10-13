@@ -52,6 +52,11 @@ alignas(256) constexpr std::array<std::uint32_t, 10> VertexCode{
     0xe0382000, 0x80000005, 0xbf8c3f70, 0x7e0a0f02, 0x7e0402f0, 0xf80000cf, 0x03020100, 0xf80008d4, 0x00050000, 0xbf810000,
 };
 
+alignas(256) constexpr std::array<std::uint32_t, 8> ClipVertexCode{
+    0xe0382000, 0x80000005, 0xbf8c3f70, 0xf80000cf, 0x03020100, 0xf80008d1, 0x00000000, 0xbf810000,
+};
+constexpr std::uint32_t ClipOutControl = (1u << 22u) | 1u;
+
 alignas(256) std::array<std::array<std::uint32_t, 16>, 16> Programs{};
 std::size_t programCount = 0;
 
@@ -138,7 +143,7 @@ AgcDriver::Registers TargetRegisters(std::uint64_t address, std::uint32_t firstS
     return cx;
 }
 
-void Draw(AgcDriver::VulkanDevice& device, const AgcDriver::Graphics::ColorTarget& color, float layer, float value, std::uint32_t outControl = LayerOutControl) {
+void Draw(AgcDriver::VulkanDevice& device, const AgcDriver::Graphics::ColorTarget& color, float layer, float value, std::uint32_t outControl = LayerOutControl, std::span<const std::uint32_t> vertexCode = VertexCode) {
     const auto target = device.Target();
     constexpr std::uint32_t waveSize = 64;
     static std::array<std::array<float, 4>, 3> triangle{};
@@ -147,11 +152,11 @@ void Draw(AgcDriver::VulkanDevice& device, const AgcDriver::Graphics::ColorTarge
     const auto address = reinterpret_cast<std::uintptr_t>(triangle.data());
     const std::array<std::uint32_t, 4> vertexBuffer{static_cast<std::uint32_t>(address), static_cast<std::uint32_t>((address >> 32u) & 0xffffu) | (16u << 16u), static_cast<std::uint32_t>(triangle.size()), 0x01016facu};
     std::copy(vertexBuffer.begin(), vertexBuffer.end(), vertexUserData.begin());
-    const std::array<ShaderRecompiler::MemoryRegion, 1> vertexMemory{{{reinterpret_cast<std::uintptr_t>(VertexCode.data()), std::as_bytes(std::span(VertexCode))}}};
+    const std::array<ShaderRecompiler::MemoryRegion, 1> vertexMemory{{{reinterpret_cast<std::uintptr_t>(vertexCode.data()), std::as_bytes(vertexCode)}}};
     ShaderRecompiler::ShaderVertexStageInfo vertexInfo{};
     vertexInfo.paClVsOutCntl = outControl;
     ShaderRecompiler::RecompileRequest vertex{
-        {ShaderStage::Vertex, reinterpret_cast<std::uintptr_t>(VertexCode.data()), VertexCode, 0, {}},
+        {ShaderStage::Vertex, reinterpret_cast<std::uintptr_t>(vertexCode.data()), vertexCode, 0, {}},
         {waveSize, 0, vertexUserData, std::nullopt, std::nullopt, vertexInfo, vertexMemory},
         target,
         {0, 0, 0, 64}
@@ -249,6 +254,29 @@ void VolumeTests(AgcDriver::VulkanDevice& device) {
     }
 }
 
+void ClipDistanceTests(AgcDriver::VulkanDevice& device, const ColorTargetLayout& layout, std::uint64_t layerBytes) {
+    Require(AgcDriver::Graphics::VertexOutputControl(ClipOutControl) == ClipOutControl, "clip distance 0 through the first distance vector lost its export bits");
+    Require(AgcDriver::Graphics::VertexOutputControl(1u << 18u) == 0u, "a render target index without the misc vector must export nothing");
+    Block block(static_cast<std::size_t>(layerBytes));
+    Mark(block);
+    const auto before = ReadBack(device, block);
+    const auto color = AgcDriver::Graphics::DecodeColorBuffer(TargetRegisters(block.Address(), 0, 0), 0);
+    Require(color.layers == 1, "the clip distance target is not one slice");
+    Draw(device, color, 0.0f, 0.5f, ClipOutControl, ClipVertexCode);
+    const auto stored = ReadBack(device, block);
+    for (std::uint32_t y = 0; y < Height; ++y) {
+        for (std::uint32_t x = 0; x < Width; ++x) {
+            const auto index = static_cast<std::size_t>(layout.Offset(x, y) / 4u);
+            const bool clipped = x < Width / 2u;
+            const auto want = clipped ? before[index] : 0.5f;
+            if (std::bit_cast<std::uint32_t>(stored[index]) == std::bit_cast<std::uint32_t>(want)) continue;
+            char detail[160];
+            std::snprintf(detail, sizeof(detail), "clip distance 0 = x: pixel (%u, %u) holds %g, expected %g", x, y, stored[index], want);
+            throw std::runtime_error(detail);
+        }
+    }
+}
+
 }
 
 int main() {
@@ -279,6 +307,7 @@ int main() {
         const auto second = ReadBack(*device, block);
         ExpectSlices(second, first, layout, layerBytes, {0.0f, 0.25f, 0.0f, 0.0f}, {false, true, false, false}, "a draw exporting layer 0 of a view starting at slice 1");
         VolumeTests(*device);
+        ClipDistanceTests(*device, layout, layerBytes);
         std::puts("layered color target tests passed");
         return 0;
     } catch (const std::exception& error) {
